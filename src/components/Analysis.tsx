@@ -1,0 +1,110 @@
+import { useMemo } from "react";
+import DOMPurify from "dompurify";
+import { AlertIcon, BookIcon, FileDiffIcon, LinkExternalIcon, MarkGithubIcon } from "@primer/octicons-react";
+import type { CveDetail, Repo } from "../types";
+import { repoContent } from "../lib/github";
+import { parseUnifiedDiff } from "../lib/diff";
+import { useAsync } from "../lib/util";
+import { BlankSlate, Spinner } from "./BlankSlate";
+import { CveHeader } from "./CveHeader";
+import { DiffView } from "./DiffView";
+import { FileList } from "./FileList";
+
+interface Props {
+  cve: CveDetail;
+  org: string;
+  /** null while the repo list is loading. */
+  repos: Repo[] | null;
+  repo: Repo | null;
+  error: string | null;
+  /** Path of the diff file on screen (from the URL); null shows the write-up. */
+  file: string | null;
+  onFile: (path: string | null) => void;
+}
+
+/** A CVE's analysis: README write-up plus every *.diff / *.patch in the repo, GitHub Desktop style. */
+export function Analysis({ cve, org, repos, repo, error: reposError, file, onFile }: Props) {
+  const [content, error] = useAsync(() => (repo ? repoContent(repo) : null), [repo]);
+
+  const files = useMemo(() => content?.patches.flatMap((p) => parseUnifiedDiff(p.content)) ?? [], [content]);
+  const readme = useMemo(() => content?.readme_html && DOMPurify.sanitize(content.readme_html), [content]);
+  const shownError = reposError ?? error;
+  const found = file === null ? -1 : files.findIndex((f) => f.path === file);
+  const selected = found < 0 ? null : found;
+
+  let main: React.ReactNode;
+  if (shownError) {
+    main = (
+      <BlankSlate icon={<AlertIcon size={48} className="big-icon" />} title="Couldn't load the analysis">
+        <p>{shownError}</p>
+      </BlankSlate>
+    );
+  } else if (!repos || (repo && !content)) {
+    main = <Spinner />;
+  } else if (!repo) {
+    main = (
+      <BlankSlate icon={<MarkGithubIcon size={48} className="big-icon" />} title="Not analyzed yet">
+        <p>
+          Analyses are GitHub repositories named after the CVE. Create <code>{`${org}/${cve.id}`}</code> to publish one,
+          or any repository named <code>{cve.id}</code> in your own account (private works too) and connect GitHub to
+          see it here. Put the write-up in <code>README.md</code> and the fix in <code>*.diff</code> or{" "}
+          <code>*.patch</code> files.
+        </p>
+      </BlankSlate>
+    );
+  } else if (selected !== null) {
+    main = <DiffView file={files[selected]} />;
+  } else if (file !== null) {
+    main = (
+      <BlankSlate>
+        <p>
+          <code>{file}</code> isn't in this repository's patches anymore.
+        </p>
+      </BlankSlate>
+    );
+  } else if (readme) {
+    main = <article className="markdown" dangerouslySetInnerHTML={{ __html: readme }} />;
+  } else {
+    main = (
+      <BlankSlate>
+        <p>
+          This repository has no README yet. Add one, plus the fix as <code>*.diff</code> or <code>*.patch</code> files,
+          and they will show up here.
+        </p>
+      </BlankSlate>
+    );
+  }
+
+  return (
+    <div className="body">
+      <aside className="sidebar">
+        {repo && (
+          <>
+            <a className="sidebar-header repo-link" href={repo.html_url} target="_blank" rel="noreferrer" title="Open on GitHub">
+              <MarkGithubIcon size={14} />
+              <span className="grow mono">{repo.full_name}</span>
+              <LinkExternalIcon size={12} />
+            </a>
+            <div className="sidebar-section">
+              <div className={`list-item file ${file === null ? "selected" : ""}`} onClick={() => onFile(null)}>
+                <BookIcon size={14} />
+                <div className="main">
+                  <div className="title">Write-up</div>
+                </div>
+              </div>
+              <div className="sidebar-header">
+                <FileDiffIcon size={14} />
+                {content ? `${files.length} changed file${files.length === 1 ? "" : "s"}` : "Loading…"}
+              </div>
+              <FileList files={files} selected={selected} onSelect={(i) => onFile(files[i].path)} />
+            </div>
+          </>
+        )}
+      </aside>
+      <main className="main-panel">
+        <CveHeader cve={cve} />
+        {main}
+      </main>
+    </div>
+  );
+}

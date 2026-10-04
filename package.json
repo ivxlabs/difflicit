@@ -1,0 +1,36 @@
+{
+  "name": "difflicit",
+  "version": "0.1.0",
+  "description": "Difflicit: patch diffing and analysis for CVEs, GitHub Desktop style.",
+  "license": "GPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ivxlabs/applesec.git"
+  },
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc -b"
+  },
+  "dependencies": {
+    "@fontsource/archivo-black": "^5.3.0",
+    "@primer/octicons-react": "^19.38.0",
+    "dompurify": "^3.4.16",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.4",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.1",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.2"
+  },
+  "sideEffects": [
+    "*.css"
+  ]
+}

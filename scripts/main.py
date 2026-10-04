@@ -1,260 +1,220 @@
+"""
+Scrape Apple security advisories + NVD metadata into the static JSON API Difflicit reads.
+
+    uv run main.py                       # writes out/api/
+    uv run main.py --limit 20            # only the first 20 advisories (quick test)
+    uv run main.py --out ../public/api   # serve it to `npm run dev` (with VITE_API_BASE=/api)
+
+Output:
+    index.json            every CVE, summarised, plus which ones have an analysis repo
+    cves/CVE-….json       one file per CVE: NVD data + every advisory entry
+
+Environment:
+    ANALYSIS_ORG   GitHub account whose CVE-YYYY-NNNN repos mark CVEs as analyzed (default: ivxlabs)
+    GITHUB_TOKEN   optional, avoids GitHub's 60 requests/hour anonymous limit
+"""
+
+import argparse
 import asyncio
+import json
+import lzma
 import os
 import re
+import shutil
+from datetime import datetime, timezone
 
 import aiohttp
 from bs4 import BeautifulSoup
 from markdownify import markdownify as md
-import json
-import lzma
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
 APPLE_SECURITY_UPDATES_URL = "https://support.apple.com/en-us/HT201222"
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DEFAULT_OUT = os.path.join(BASE_DIR, "out", "api")
 
-CONTENT_DIR = os.path.join(BASE_DIR, "content")
-CHANGELOGS_DIR = os.path.join(CONTENT_DIR, "changelogs")
+NVD_FEED_URL = "https://github.com/fkie-cad/nvd-json-data-feeds/releases/latest/download/CVE-{year}.json.xz"
+SEVERITIES = {"CRITICAL": "Critical", "HIGH": "High", "MEDIUM": "Medium", "LOW": "Low"}
 
-SEVERITY_MAPPING = {
-    "CRITICAL": "Critical",
-    "HIGH": "High",
-    "MEDIUM": "Medium",
-    "LOW": "Low",
-}
-DEFAULT_SEVERITY = "Medium"
+ADVISORY_KEYWORDS = ["iOS", "iPadOS", "macOS", "watchOS", "tvOS", "Safari", "Xcode", "visionOS"]
+APPLE_CONCURRENCY = 50
 
-NVD_API_URL = "https://services.nvd.nist.gov/rest/json/cves/2.0"
-NVD_DELAY = 6.5  # seconds between NVD requests (no API key limit)
+CVE_RE = re.compile(r"CVE-\d{4}-\d{4,7}")
+RELEASED_RE = re.compile(r"Released\s+([A-Z][a-z]+ \d{1,2}, \d{4})")
+HEADING_RE = re.compile(r"^(?:#{3,4}\s+(.+?)|\*\*([^*]+?)\*\*)\s*$")
+FIELD_RE = re.compile(r"^(Impact|Description|Available for):\s*(.*)$")
+CVE_LINE_RE = re.compile(r"^(CVE-\d{4}-\d{4,7})(?::\s*(.*))?$")
 
-SEVERITY_WEIGHT = {"Critical": 1, "High": 2, "Medium": 3, "Low": 4}
-SEVERITY_BADGE_HTML = {
-    "Critical": '<span style="background:#b91c1c;color:#fff;padding:1px 8px;border-radius:4px;font-size:0.8em;font-weight:700;letter-spacing:0.05em">CRITICAL</span>',
-    "High": '<span style="background:#c2410c;color:#fff;padding:1px 8px;border-radius:4px;font-size:0.8em;font-weight:700;letter-spacing:0.05em">HIGH</span>',
-    "Medium": '<span style="background:#b45309;color:#fff;padding:1px 8px;border-radius:4px;font-size:0.8em;font-weight:700;letter-spacing:0.05em">MEDIUM</span>',
-    "Low": '<span style="background:#15803d;color:#fff;padding:1px 8px;border-radius:4px;font-size:0.8em;font-weight:700;letter-spacing:0.05em">LOW</span>',
-}
-
-PLATFORM_ORDER = [
-    "iOS",
-    "iPadOS",
-    "macOS",
-    "watchOS",
-    "tvOS",
-    "visionOS",
-    "Safari",
-    "Xcode",
-    "Other",
-]
-PLATFORM_WEIGHT = {p: i + 1 for i, p in enumerate(PLATFORM_ORDER)}
-
-ADVISORY_KEYWORDS = [
-    "iOS",
-    "iPadOS",
-    "macOS",
-    "watchOS",
-    "tvOS",
-    "Safari",
-    "Xcode",
-    "visionOS",
-]
-APPLE_CONCURRENCY = 150  # max concurrent requests to support.apple.com
-
-# NVD in-process cache and rate-limit semaphore (initialised inside main())
-_NVD_CACHE: dict = {}
-_DOWNLOADED_YEARS: set[str] = set()
-_NVD_SEMAPHORE: asyncio.Semaphore | None = None
+ANALYSIS_ORG = os.environ.get("ANALYSIS_ORG", "ivxlabs")
+ANALYSIS_REPO_RE = re.compile(r"^CVE-\d{4}-\d{4,}$", re.I)
 
 
 # ---------------------------------------------------------------------------
-# Small utilities
+# Helpers
 # ---------------------------------------------------------------------------
-
-
-def _yaml_str(value: str) -> str:
-    """Escape a value for use inside a YAML double-quoted scalar."""
-    return value.replace("\\", "\\\\").replace('"', '\\"')
-
-
-def _url_id(url: str) -> str:
-    """Return the last path segment of a URL (Apple advisory identifier)."""
-    return url.rstrip("/").split("/")[-1]
 
 
 def detect_platforms(title: str) -> list[str]:
     tl = title.lower()
+    checks = [
+        ("ios", "iOS"),
+        ("ipados", "iPadOS"),
+        ("macos", "macOS"),
+        ("os x", "macOS"),
+        ("watchos", "watchOS"),
+        ("tvos", "tvOS"),
+        ("visionos", "visionOS"),
+        ("safari", "Safari"),
+        ("xcode", "Xcode"),
+    ]
     platforms: list[str] = []
-    if "ios" in tl:
-        platforms.append("iOS")
-    if "ipados" in tl:
-        platforms.append("iPadOS")
-    if "macos" in tl or "os x" in tl:
-        platforms.append("macOS")
-    if "watchos" in tl:
-        platforms.append("watchOS")
-    if "tvos" in tl:
-        platforms.append("tvOS")
-    if "visionos" in tl:
-        platforms.append("visionOS")
-    if "safari" in tl:
-        platforms.append("Safari")
-    if "xcode" in tl:
-        platforms.append("Xcode")
-    if not platforms:
-        platforms.append("Other")
-    return platforms
+    for needle, name in checks:
+        if needle in tl and name not in platforms:
+            platforms.append(name)
+    return platforms or ["Other"]
+
+
+def _url_id(url: str) -> str:
+    return url.rstrip("/").split("/")[-1]
+
+
+def _clean(text: str) -> str:
+    """Strip markdown emphasis and markdownify's escaping from a single line."""
+    return text.replace("\\_", "_").replace("\\*", "*").strip(" *")
+
+
+def parse_released(markdown: str) -> str | None:
+    m = RELEASED_RE.search(markdown)
+    if not m:
+        return None
+    try:
+        return datetime.strptime(m.group(1), "%B %d, %Y").date().isoformat()
+    except ValueError:
+        return None
+
+
+def parse_entries(markdown: str) -> list[dict]:
+    """
+    Split an advisory into per-CVE entries:
+        ### Kernel            (or **Kernel**)
+        Impact: ...
+        Description: ...
+        CVE-2024-54494: credit
+    The "Additional recognition" section only credits people and is skipped.
+    """
+    body = re.split(r"\n\s*Additional recognition\s*\n", markdown, maxsplit=1)[0]
+    entries: dict[tuple[str, str], dict] = {}
+    component, impact, description = "", None, None
+
+    for raw in body.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        heading = HEADING_RE.match(line)
+        if heading:
+            component = _clean(heading.group(1) or heading.group(2))
+            impact = description = None
+            continue
+        field = FIELD_RE.match(line)
+        if field:
+            if field.group(1) == "Impact":
+                impact = _clean(field.group(2))
+            elif field.group(1) == "Description":
+                description = _clean(field.group(2))
+            continue
+        cve_line = CVE_LINE_RE.match(_clean(line))
+        if cve_line:
+            cve = cve_line.group(1)
+            entries[(cve, component)] = {
+                "cve": cve,
+                "component": component,
+                "impact": impact,
+                "description": description,
+                "credit": _clean(cve_line.group(2) or "") or None,
+            }
+
+    # Anything mentioned but not in a recognisable entry still gets linked to the advisory.
+    seen = {cve for cve, _ in entries}
+    for cve in sorted(set(CVE_RE.findall(body)) - seen):
+        entries[(cve, "")] = {"cve": cve, "component": "", "impact": None, "description": None, "credit": None}
+    return list(entries.values())
 
 
 # ---------------------------------------------------------------------------
-# Hugo content helpers
+# NVD (bulk yearly feeds from fkie-cad/nvd-json-data-feeds)
 # ---------------------------------------------------------------------------
 
 
-def _make_cve_page(
-    item: dict, cve: str, severity: str, nvd_data: dict | None = None
-) -> str:
-    """Build the full Hugo page for a single CVE / platform combination."""
-    platform = item["platform"]
-    url = item["url"]
-    title = item["title"]
-    advisory_id = item.get("advisory_id", _url_id(url))
-
-    weight = SEVERITY_WEIGHT.get(severity, 5)
-    badge = SEVERITY_BADGE_HTML.get(
-        severity,
-        f'<span style="background:#6b7280;color:#fff;padding:1px 8px;border-radius:4px;font-size:0.8em;font-weight:700">{severity.upper()}</span>',
+def parse_nvd(cve_obj: dict) -> dict:
+    metrics = cve_obj.get("metrics", {})
+    description = next(
+        (d["value"] for d in cve_obj.get("descriptions", []) if d.get("lang") == "en"),
+        None,
     )
 
-    front_matter = (
-        "---\n"
-        f'title: "{_yaml_str(cve)}"\n'
-        f"weight: {weight}\n"
-        "params:\n"
-        f'  severity: "{_yaml_str(severity)}"\n'
-        f'  platform: "{_yaml_str(platform)}"\n'
-        f'  url: "{_yaml_str(url)}"\n'
-        f'  advisoryTitle: "{_yaml_str(title)}"\n'
-        f'  changelogId: "{_yaml_str(advisory_id)}"\n'
-        "---\n"
-    )
+    cvss, severity = None, None
+    for key in ("cvssMetricV31", "cvssMetricV30"):
+        if key in metrics:
+            cvss = metrics[key][0]["cvssData"]
+            severity = cvss.get("baseSeverity")
+            break
+    else:
+        if "cvssMetricV2" in metrics:
+            m = metrics["cvssMetricV2"][0]
+            cvss = m["cvssData"]
+            severity = m.get("baseSeverity") or m.get("baseMetricV2", {}).get("severity")
 
-    header = (
-        f"{badge} &nbsp;|&nbsp; "
-        f"**Platform:** {platform} &nbsp;|&nbsp; "
-        f"[Changelog](/changelogs/{advisory_id}/)"
-    )
+    cwes: list[str] = []
+    for w in cve_obj.get("weaknesses", []):
+        for d in w.get("description", []):
+            val = d.get("value", "")
+            if d.get("lang") == "en" and val.startswith("CWE-") and val not in cwes:
+                cwes.append(val)
 
-    # CVE Details accordion — content sourced from NVD, not the Apple changelog
-    details_content = _format_nvd_details(nvd_data, cve, url)
-    details_open = '{{% details title="CVE Details" %}}'
-    details_close = "{{% /details %}}"
+    # NVD repeats a URL once per source that submitted it; keep the first.
+    refs, seen = [], set()
+    for r in cve_obj.get("references", []):
+        if r.get("url") and r["url"] not in seen:
+            seen.add(r["url"])
+            refs.append({"url": r["url"], "tags": r.get("tags", [])})
 
-    body = "\n".join(
-        [
-            header,
-            "",
-            details_open,
-            "",
-            details_content,
-            "",
-            details_close,
-            "",
-        ]
-    )
-
-    return front_matter + "\n" + body
+    return {
+        "severity": SEVERITIES.get((severity or "").upper()),
+        "cvss_score": cvss.get("baseScore") if cvss else None,
+        "cvss_version": cvss.get("version") if cvss else None,
+        "cvss_vector": cvss.get("vectorString") if cvss else None,
+        "description": description,
+        "cwes": cwes,
+        "refs": refs[:25],
+    }
 
 
-def _make_changelog_page(
-    advisory_id: str, title: str, url: str, platforms: list[str], markdown_body: str
-) -> str:
-    """Build the Hugo page for a full Apple security advisory (changelog)."""
-    platforms_list = ", ".join(f'"{p}"' for p in platforms)
-
-    front_matter = (
-        "---\n"
-        f'title: "{_yaml_str(title)}"\n'
-        "params:\n"
-        f'  url: "{_yaml_str(url)}"\n'
-        f'  canonicalURL: "{_yaml_str(url)}"\n'
-        f"  platforms: [{platforms_list}]\n"
-        "---\n"
-    )
-
-    header = f"[Original Advisory]({url})\n"
-
-    return front_matter + "\n" + header + "\n" + markdown_body + "\n"
+async def load_nvd(session: aiohttp.ClientSession, cves: set[str]) -> dict[str, dict]:
+    wanted_years = sorted({c.split("-")[1] for c in cves})
+    out: dict[str, dict] = {}
+    for year in wanted_years:
+        print(f"NVD {year}: downloading…")
+        try:
+            async with session.get(NVD_FEED_URL.format(year=year)) as res:
+                if res.status != 200:
+                    print(f"NVD {year}: HTTP {res.status}, skipping")
+                    continue
+                blob = await res.read()
+            data = json.loads(lzma.decompress(blob))
+        except Exception as e:  # noqa: BLE001 - one bad year shouldn't sink the run
+            print(f"NVD {year}: {e}")
+            continue
+        for item in data.get("cve_items", []):
+            if item["id"] in cves:
+                out[item["id"]] = parse_nvd(item)
+    print(f"NVD: matched {len(out)}/{len(cves)} CVEs")
+    return out
 
 
 # ---------------------------------------------------------------------------
-# Hugo section-index helpers  (called lazily so we never overwrite user edits)
-# ---------------------------------------------------------------------------
-
-
-def _ensure_home_index() -> None:
-    os.makedirs(CONTENT_DIR, exist_ok=True)
-    path = os.path.join(CONTENT_DIR, "_index.md")
-    if os.path.exists(path):
-        return
-    content = """\
----
-title: Dissecting Apple
-toc: false
----
-
-{{< cards >}}
-  {{< card link="iOS"       title="iOS"       icon="device-mobile"    subtitle="iPhone vulnerabilities" >}}
-  {{< card link="iPadOS"    title="iPadOS"    icon="device-tablet"    subtitle="iPad vulnerabilities" >}}
-  {{< card link="macOS"     title="macOS"     icon="desktop-computer" subtitle="Mac vulnerabilities" >}}
-  {{< card link="watchOS"   title="watchOS"   icon="clock"            subtitle="Apple Watch vulnerabilities" >}}
-  {{< card link="tvOS"      title="tvOS"      icon="film"             subtitle="Apple TV vulnerabilities" >}}
-  {{< card link="visionOS"  title="visionOS"  icon="eye"              subtitle="Vision Pro vulnerabilities" >}}
-  {{< card link="Safari"    title="Safari"    icon="globe-alt"        subtitle="Browser vulnerabilities" >}}
-  {{< card link="Xcode"     title="Xcode"     icon="code"             subtitle="Developer tool vulnerabilities" >}}
-  {{< card link="changelogs" title="Changelogs" icon="document-text"  subtitle="Apple security release notes" >}}
-{{< /cards >}}
-"""
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(content)
-
-
-def _ensure_changelogs_index() -> None:
-    os.makedirs(CHANGELOGS_DIR, exist_ok=True)
-    path = os.path.join(CHANGELOGS_DIR, "_index.md")
-    if os.path.exists(path):
-        return
-    with open(path, "w", encoding="utf-8") as f:
-        f.write("---\ntitle: Changelogs\nweight: 99\nsidebar:\n  open: false\n---\n")
-
-
-def _ensure_platform_index(platform: str) -> None:
-    platform_dir = os.path.join(CONTENT_DIR, platform)
-    os.makedirs(platform_dir, exist_ok=True)
-    path = os.path.join(platform_dir, "_index.md")
-    if os.path.exists(path):
-        return
-    weight = PLATFORM_WEIGHT.get(platform, 50)
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(f"---\ntitle: {platform}\nweight: {weight}\n---\n")
-
-
-def _ensure_severity_index(platform: str, severity: str) -> None:
-    sev_dir = os.path.join(CONTENT_DIR, platform, severity)
-    os.makedirs(sev_dir, exist_ok=True)
-    path = os.path.join(sev_dir, "_index.md")
-    if os.path.exists(path):
-        return
-    weight = SEVERITY_WEIGHT.get(severity, 5)
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(
-            f"---\ntitle: {severity}\nweight: {weight}\nsidebar:\n  open: false\n---\n"
-        )
-
-
-# ---------------------------------------------------------------------------
-# Network helpers
+# Apple scraping
 # ---------------------------------------------------------------------------
 
 
@@ -262,423 +222,163 @@ async def get_soup(session, url):
     try:
         async with session.get(url) as response:
             response.raise_for_status()
-            content = await response.text()
-            return BeautifulSoup(content, "html.parser")
-    except Exception as e:
+            return BeautifulSoup(await response.text(), "html.parser")
+    except Exception as e:  # noqa: BLE001
         print(f"Error fetching {url}: {e}")
         return None
 
 
-def _parse_cve_obj(cve_obj: dict) -> dict:
-    metrics = cve_obj.get("metrics", {})
-
-    # English description
-    description = next(
-        (
-            d["value"]
-            for d in cve_obj.get("descriptions", [])
-            if d.get("lang") == "en"
-        ),
-        "",
-    )
-
-    # CVSS — prefer v3.1 > v3.0 > v2
-    cvss_data = None
-    severity = None
-    if "cvssMetricV31" in metrics:
-        m = metrics["cvssMetricV31"][0]
-        severity = m["cvssData"]["baseSeverity"].title()
-        cvss_data = m["cvssData"]
-    elif "cvssMetricV30" in metrics:
-        m = metrics["cvssMetricV30"][0]
-        severity = m["cvssData"]["baseSeverity"].title()
-        cvss_data = m["cvssData"]
-    elif "cvssMetricV2" in metrics:
-        m = metrics["cvssMetricV2"][0]
-        severity = m["baseMetricV2"]["severity"].title()
-        cvss_data = m["cvssData"]
-
-    # CWEs (deduplicated, skip catch-all entries)
-    cwes: list[str] = []
-    for w in cve_obj.get("weaknesses", []):
-        for d in w.get("description", []):
-            val = d.get("value", "")
-            if (
-                d.get("lang") == "en"
-                and val.startswith("CWE-")
-                and val not in cwes
-            ):
-                cwes.append(val)
-
-    # References
-    references = [
-        {"url": r["url"], "tags": r.get("tags", [])}
-        for r in cve_obj.get("references", [])
-        if r.get("url")
+def _links(soup) -> list[tuple[str, str]]:
+    """(text, absolute href) of every link on a support.apple.com page."""
+    return [
+        (a.get_text().strip(), "https://support.apple.com" + a["href"] if a["href"].startswith("/") else a["href"])
+        for a in soup.find_all("a", href=True)
     ]
 
-    return {
-        "severity": severity,
-        "description": description,
-        "cvss": cvss_data,
-        "cwes": cwes,
-        "references": references,
-    }
+
+def _is_advisory(text: str) -> bool:
+    return "archive" not in text.lower() and "Apple security" not in text and any(k in text for k in ADVISORY_KEYWORDS)
 
 
-async def _ensure_year_downloaded(session, year: str) -> None:
-    if year in _DOWNLOADED_YEARS:
-        return
-
-    async with _NVD_SEMAPHORE:
-        if year in _DOWNLOADED_YEARS:
-            return
-
-        url = f"https://github.com/fkie-cad/nvd-json-data-feeds/releases/latest/download/CVE-{year}.json.xz"
-        print(f"Downloading NVD data for {year}...")
-        try:
-            async with session.get(url) as response:
-                if response.status != 200:
-                    print(f"Failed to download NVD data for {year}: HTTP {response.status}")
-                    _DOWNLOADED_YEARS.add(year)  # Mark as done so we don't spam requests
-                    return
-                content = await response.read()
-                
-            print(f"Parsing NVD data for {year}...")
-            # Decompress xz
-            json_data = lzma.decompress(content)
-            data = json.loads(json_data)
-            for cve_item in data.get("cve_items", []):
-                _NVD_CACHE[cve_item["id"]] = _parse_cve_obj(cve_item)
-                
-            _DOWNLOADED_YEARS.add(year)
-            print(f"Successfully loaded NVD data for {year}")
-        except Exception as e:
-            print(f"Error downloading/parsing NVD data for {year}: {e}")
-            _DOWNLOADED_YEARS.add(year)  # Prevent retry loop on fatal error
-
-
-async def _get_nvd_data_cached(session, cve_id: str) -> dict | None:
-    """
-    Fetch NVD data by downloading the entire year's CVEs from the fkie-cad archive.
-    """
-    if cve_id in _NVD_CACHE:
-        return _NVD_CACHE[cve_id]
-
-    year_match = re.search(r"CVE-(\d{4})-", cve_id)
-    if not year_match:
-        return None
-        
-    year = year_match.group(1)
-    await _ensure_year_downloaded(session, year)
-    
-    return _NVD_CACHE.get(cve_id)
-
-
-def _format_nvd_details(nvd_data: dict | None, cve_id: str, apple_url: str) -> str:
-    """Format NVD CVE data as Markdown for the CVE Details accordion."""
-    nvd_url = f"https://nvd.nist.gov/vuln/detail/{cve_id}"
-
-    if not nvd_data:
-        return (
-            f"No NVD data available for this CVE.\n\n"
-            f"- [Apple Security Advisory]({apple_url})\n"
-            f"- [NVD Entry]({nvd_url})\n"
-        )
-
-    lines: list[str] = []
-
-    # Description
-    desc = nvd_data.get("description", "")
-    if desc:
-        lines += ["**Description**", "", desc, ""]
-
-    # CVSS score table
-    cvss = nvd_data.get("cvss")
-    if cvss:
-        score = cvss.get("baseScore", "N/A")
-        sev = cvss.get("baseSeverity", "")
-        vector = cvss.get("vectorString", "")
-        ver = cvss.get("version", "")
-        lines += [
-            f"**CVSS {ver} Score**",
-            "",
-            "| Metric | Value |",
-            "|--------|-------|",
-            f"| Base Score | **{score}** ({sev}) |",
-        ]
-        if vector:
-            lines.append(f"| Vector | `{vector}` |")
-        lines.append("")
-
-    # CWE weaknesses
-    cwes = nvd_data.get("cwes", [])
-    if cwes:
-        lines += ["**Weakness**", ""]
-        for cwe in cwes:
-            cwe_num = cwe.replace("CWE-", "")
-            lines.append(
-                f"- [{cwe}](https://cwe.mitre.org/data/definitions/{cwe_num}.html)"
-            )
-        lines.append("")
-
-    # References
-    lines += ["**References**", ""]
-    lines.append(f"- [Apple Security Advisory]({apple_url})")
-    lines.append(f"- [NVD Entry]({nvd_url})")
-    seen = {apple_url, nvd_url}
-    for ref in nvd_data.get("references", [])[:8]:
-        ref_url = ref.get("url", "")
-        tags = ref.get("tags", [])
-        if ref_url and ref_url not in seen:
-            seen.add(ref_url)
-            tag_str = f" *({', '.join(tags)})*" if tags else ""
-            lines.append(f"- [{ref_url}]({ref_url}){tag_str}")
-
-    return "\n".join(lines)
-
-
-# ---------------------------------------------------------------------------
-# Changelog writer  (one file per Apple advisory URL, written once)
-# ---------------------------------------------------------------------------
-
-
-def _save_changelog(
-    advisory_id: str, title: str, url: str, platforms: list[str], markdown_body: str
-) -> None:
-    _ensure_changelogs_index()
-    path = os.path.join(CHANGELOGS_DIR, f"{advisory_id}.md")
-    page = _make_changelog_page(advisory_id, title, url, platforms, markdown_body)
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(page)
-    print(f"Saved changelog {path}")
-
-
-# ---------------------------------------------------------------------------
-# Advisory scraper
-# ---------------------------------------------------------------------------
-
-
-async def process_advisory(session, url, title, nvd_queue):
-    print(f"Scraping advisory: {title}")
-    soup = await get_soup(session, url)
-    if not soup:
-        return
-
-    content_div = soup.find("div", {"id": "sections"}) or soup.find(
-        "div", {"class": "main"}
-    )
-    markdown_content = md(str(content_div) if content_div else str(soup))
-
-    platforms = detect_platforms(title)
-    advisory_id = _url_id(url)
-    cve_pattern = r"CVE-\d{4}-\d{4,7}"
-    cves = set(re.findall(cve_pattern, markdown_content))
-
-    if not cves:
-        return
-
-    # Persist the full Apple advisory page as a changelog (idempotent)
-    _save_changelog(advisory_id, title, url, platforms, markdown_content)
-
-    for cve in cves:
-        for platform in platforms:
-            await nvd_queue.put(
-                {
-                    "cve": cve,
-                    "platform": platform,
-                    "title": title,
-                    "url": url,
-                    "advisory_id": advisory_id,
-                    "markdown": markdown_content,
-                    "date": "Unknown Date",
-                }
-            )
-
-
-# ---------------------------------------------------------------------------
-# NVD worker  (severity resolution + Hugo CVE page writer)
-# ---------------------------------------------------------------------------
-
-
-async def nvd_worker(session, queue):
-    while True:
-        item = await queue.get()
-        cve = item["cve"]
-        platform = item["platform"]
-
-        # ── Step 1: fetch full NVD data (cached + rate-limited per CVE) ──────
-        nvd_data = await _get_nvd_data_cached(session, cve)
-        nvd_severity = (nvd_data or {}).get("severity")
-
-        # ── Step 2: resolve severity ──────────────────────────────────────────
-        if nvd_severity and nvd_severity.upper() in SEVERITY_MAPPING:
-            severity = SEVERITY_MAPPING[nvd_severity.upper()]
-        else:
-            # Fallback: old advisory directory structure still present in repo
-            severity = DEFAULT_SEVERITY
-            for s in SEVERITY_MAPPING.values():
-                if os.path.isdir(os.path.join(BASE_DIR, s, cve)):
-                    severity = s
-                    break
-
-        # print(f"{cve} ({platform}) → {severity}")
-
-        # ── Step 3: always write Hugo CVE page (picks up template changes) ────
-        _ensure_platform_index(platform)
-        _ensure_severity_index(platform, severity)
-
-        out_dir = os.path.join(CONTENT_DIR, platform, severity)
-        os.makedirs(out_dir, exist_ok=True)
-        out_path = os.path.join(out_dir, f"{cve}.md")
-
-        with open(out_path, "w", encoding="utf-8") as f:
-            f.write(_make_cve_page(item, cve, severity, nvd_data))
-        # print(f"Saved {out_path}")
-
-        queue.task_done()
-
-
-# ---------------------------------------------------------------------------
-# README generator
-# ---------------------------------------------------------------------------
-
-
-def update_readme():
-    print("Updating README.md…")
-    readme_path = os.path.join(BASE_DIR, "README.md")
-
-    tech_columns = [
-        "iOS",
-        "iPadOS",
-        "macOS",
-        "tvOS",
-        "watchOS",
-        "visionOS",
-        "Safari",
-        "Xcode",
-    ]
-    severity_counts = {
-        s: {t: 0 for t in tech_columns} for s in SEVERITY_MAPPING.values()
-    }
-
-    # Count from new Hugo content structure
-    if os.path.exists(CONTENT_DIR):
-        for platform in os.listdir(CONTENT_DIR):
-            if platform not in tech_columns:
-                continue
-            for severity in SEVERITY_MAPPING.values():
-                sev_dir = os.path.join(CONTENT_DIR, platform, severity)
-                if not os.path.isdir(sev_dir):
-                    continue
-                count = sum(
-                    1
-                    for f in os.listdir(sev_dir)
-                    if f.startswith("CVE-") and f.endswith(".md")
-                )
-                severity_counts[severity][platform] += count
-
-    # Fallback: also tally old advisory directories not yet migrated
-    for severity in SEVERITY_MAPPING.values():
-        old_sev_dir = os.path.join(BASE_DIR, severity)
-        if not os.path.isdir(old_sev_dir):
-            continue
-        for cve in os.listdir(old_sev_dir):
-            if not cve.startswith("CVE-"):
-                continue
-            cve_dir = os.path.join(old_sev_dir, cve)
-            if not os.path.isdir(cve_dir):
-                continue
-            for platform in os.listdir(cve_dir):
-                if platform not in tech_columns:
-                    continue
-                # Skip if already represented in new structure
-                if os.path.exists(
-                    os.path.join(CONTENT_DIR, platform, severity, f"{cve}.md")
-                ):
-                    continue
-                severity_counts[severity][platform] += 1
-
-    content = (
-        "# Apple CVEs\n\n"
-        "Automated tracking of Apple platform security advisories and CVEs.\n\n"
-        "## CVE counts by severity and platform\n\n"
-    )
-    header = "| Severity | " + " | ".join(tech_columns) + " |\n"
-    separator = "| :--- | " + " | ".join([":---:"] * len(tech_columns)) + " |\n"
-    content += header + separator
-    for severity, counts in severity_counts.items():
-        row = (
-            f"| [{severity}](content/{severity}/) | "
-            + " | ".join(str(counts[p]) for p in tech_columns)
-            + " |\n"
-        )
-        content += row
-
-    with open(readme_path, "w", encoding="utf-8") as f:
-        f.write(content)
-    print("README.md updated.")
-
-
-# ---------------------------------------------------------------------------
-# Phase 1 — URL discovery
-# ---------------------------------------------------------------------------
-
-
-async def _discover_advisory_urls(
-    session: aiohttp.ClientSession,
-) -> list[tuple[str, str]]:
-    """
-    Fetch only the main Apple security releases page plus every archive index
-    page (≈10-20 requests total) and return a deduplicated list of
-    (advisory_url, title) pairs for all individual advisories found.
-    """
+async def discover_advisory_urls(session) -> list[tuple[str, str]]:
+    """Return (url, title) for every advisory on the security releases page and its archives since 2020."""
     soup = await get_soup(session, APPLE_SECURITY_UPDATES_URL)
     if not soup:
         return []
+    links = _links(soup)
+    archives = [
+        href
+        for text, href in links
+        if "Apple security" in text and any(int(y) >= 2020 for y in re.findall(r"\d{4}", text))
+    ]
+    print(f"Fetching {len(archives)} archive index pages…")
+    for archive in await asyncio.gather(*[get_soup(session, h) for h in archives]):
+        links += _links(archive) if archive else []
 
-    advisories: dict[str, str] = {}  # url -> title (deduped)
-    archive_hrefs: list[str] = []
-
-    for link in soup.find_all("a", href=True):
-        text = link.get_text().strip()
-        href = link["href"]
-        if href.startswith("/"):
-            href = "https://support.apple.com" + href
-
-        if "Apple security updates" in text:
-            years = re.findall(r"\d{4}", text)
-            if years and any(int(y) >= 2020 for y in years):
-                archive_hrefs.append(href)
-            continue
-
-        if "archive" in text.lower():
-            continue
-
-        if any(kw in text for kw in ADVISORY_KEYWORDS):
-            advisories[href] = text
-
-    # Fetch all archive index pages concurrently (small number, no semaphore needed)
-    print(f"Fetching {len(archive_hrefs)} archive index pages…")
-    archive_soups = await asyncio.gather(
-        *[get_soup(session, href) for href in archive_hrefs],
-        return_exceptions=True,
-    )
-
-    for archive_soup in archive_soups:
-        if not isinstance(archive_soup, BeautifulSoup):
-            continue
-        for link in archive_soup.find_all("a", href=True):
-            text = link.get_text().strip()
-            href = link["href"]
-            if href.startswith("/"):
-                href = "https://support.apple.com" + href
-            if "Apple security updates" in text or "archive" in text.lower():
-                continue
-            if any(kw in text for kw in ADVISORY_KEYWORDS) and href not in advisories:
-                advisories[href] = text
-
+    advisories: dict[str, str] = {}
+    for text, href in links:
+        if _is_advisory(text):
+            advisories.setdefault(href, text)
     return list(advisories.items())
+
+
+async def scrape_advisory(session, url: str, title: str) -> dict | None:
+    soup = await get_soup(session, url)
+    if not soup:
+        return None
+    content = soup.find("div", {"id": "sections"}) or soup.find("div", {"class": "main"})
+    markdown = md(str(content) if content else str(soup))
+    entries = parse_entries(markdown)
+    if not entries:
+        return None
+    return {
+        "id": _url_id(url),
+        "title": title,
+        "url": url,
+        "platforms": detect_platforms(title),
+        "released": parse_released(markdown),
+        "entries": entries,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Analysis repos
+# ---------------------------------------------------------------------------
+
+
+async def load_analyzed(session: aiohttp.ClientSession) -> set[str]:
+    """CVE ids that have a public github.com/<ANALYSIS_ORG>/CVE-YYYY-NNNN repo."""
+    headers = {"accept": "application/vnd.github+json"}
+    if token := os.environ.get("GITHUB_TOKEN"):
+        headers["authorization"] = f"Bearer {token}"
+    names: set[str] = set()
+    for page in range(1, 100):
+        url = f"https://api.github.com/users/{ANALYSIS_ORG}/repos?type=public&per_page=100&page={page}"
+        async with session.get(url, headers=headers) as res:
+            if res.status != 200:
+                print(f"GitHub {ANALYSIS_ORG} repos: HTTP {res.status}, marking nothing as analyzed")
+                return set()
+            batch = await res.json()
+        names |= {r["name"].upper() for r in batch if ANALYSIS_REPO_RE.match(r["name"])}
+        if len(batch) < 100:
+            break
+    print(f"GitHub: {len(names)} analysis repos in {ANALYSIS_ORG}")
+    return names
+
+
+# ---------------------------------------------------------------------------
+# JSON output
+# ---------------------------------------------------------------------------
+
+
+def _write_json(path: str, data) -> None:
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
+
+
+def write_api(out: str, advisories: list[dict], nvd: dict[str, dict], analyzed: set[str]) -> None:
+    shutil.rmtree(out, ignore_errors=True)
+    os.makedirs(os.path.join(out, "cves"))
+
+    # Group every advisory entry under its CVE, newest advisory first.
+    by_cve: dict[str, list[dict]] = {}
+    for a in sorted(advisories, key=lambda a: a["released"] or "", reverse=True):
+        for e in a["entries"]:
+            by_cve.setdefault(e["cve"], []).append(
+                {
+                    "advisory_id": a["id"],
+                    "component": e["component"],
+                    "impact": e["impact"],
+                    "description": e["description"],
+                    "credit": e["credit"],
+                    "title": a["title"],
+                    "url": a["url"],
+                    "released": a["released"],
+                    "platforms": a["platforms"],
+                }
+            )
+
+    index = []
+    for cve, entries in by_cve.items():
+        n = nvd.get(cve, {})
+        _write_json(
+            os.path.join(out, "cves", f"{cve}.json"),
+            {
+                "id": cve,
+                "severity": n.get("severity"),
+                "cvss_score": n.get("cvss_score"),
+                "cvss_version": n.get("cvss_version"),
+                "cvss_vector": n.get("cvss_vector"),
+                "nvd_description": n.get("description"),
+                "cwes": n.get("cwes", []),
+                "refs": n.get("refs", []),
+                "entries": entries,
+            },
+        )
+        index.append(
+            {
+                "id": cve,
+                "severity": n.get("severity"),
+                "cvss_score": n.get("cvss_score"),
+                "components": list(dict.fromkeys(e["component"] for e in entries if e["component"])),
+                "impact": next((e["impact"] for e in entries if e["impact"]), None),
+                "released": max((e["released"] for e in entries if e["released"]), default=None),
+                "platforms": sorted({p for e in entries for p in e["platforms"]}),
+                "analyzed": cve in analyzed,
+            }
+        )
+
+    index.sort(key=lambda c: (c["released"] or "", c["id"]), reverse=True)
+    _write_json(
+        os.path.join(out, "index.json"),
+        {
+            "generated": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "org": ANALYSIS_ORG,
+            "advisories": len(advisories),
+            "cves": index,
+        },
+    )
+    print(f"Wrote {out}: {len(advisories)} advisories, {len(index)} CVEs, {len(analyzed)} analyzed")
 
 
 # ---------------------------------------------------------------------------
@@ -686,59 +386,39 @@ async def _discover_advisory_urls(
 # ---------------------------------------------------------------------------
 
 
-async def main():
-    global _NVD_SEMAPHORE
-    _NVD_SEMAPHORE = asyncio.Semaphore(1)
-
-    _ensure_home_index()
-    _ensure_changelogs_index()
-
-    print("Starting async scraper…")
+async def main(out: str, limit: int | None) -> None:
     headers = {
         "User-Agent": (
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-            "AppleWebKit/605.1.15 (KHTML, like Gecko) "
-            "Version/17.2 Safari/605.1.15"
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 "
+            "(KHTML, like Gecko) Version/17.2 Safari/605.1.15"
         )
     }
-
-    # Higher connection pool so 150 concurrent Apple requests don't queue inside aiohttp
-    connector = aiohttp.TCPConnector(limit=300, limit_per_host=APPLE_CONCURRENCY + 50)
-
+    connector = aiohttp.TCPConnector(limit=APPLE_CONCURRENCY + 10)
     async with aiohttp.ClientSession(headers=headers, connector=connector) as session:
-        # ── Phase 1: discover every advisory URL (fast — only archive index pages) ──
-        print("Phase 1 — discovering advisory URLs…")
-        advisory_urls = await _discover_advisory_urls(session)
-        print(f"Found {len(advisory_urls)} advisories to process")
+        urls = await discover_advisory_urls(session)
+        if limit:
+            urls = urls[:limit]
+        print(f"Scraping {len(urls)} advisories…")
 
-        # ── Phase 2: fetch all advisory pages, bounded to APPLE_CONCURRENCY at once ──
-        nvd_queue: asyncio.Queue = asyncio.Queue()
-        workers = [
-            asyncio.create_task(nvd_worker(session, nvd_queue)) for _ in range(3)
-        ]
+        sem = asyncio.Semaphore(APPLE_CONCURRENCY)
 
-        apple_sem = asyncio.Semaphore(APPLE_CONCURRENCY)
+        async def bounded(url: str, title: str):
+            async with sem:
+                return await scrape_advisory(session, url, title)
 
-        async def bounded_process(url: str, title: str) -> None:
-            async with apple_sem:
-                await process_advisory(session, url, title, nvd_queue)
+        results = await asyncio.gather(*[bounded(u, t) for u, t in urls])
+        advisories = [a for a in results if a]
 
-        print(
-            f"Phase 2 — fetching {len(advisory_urls)} advisory pages "
-            f"(≤{APPLE_CONCURRENCY} concurrent)…"
-        )
-        await asyncio.gather(
-            *[bounded_process(url, title) for url, title in advisory_urls]
-        )
+        cves = {e["cve"] for a in advisories for e in a["entries"]}
+        nvd = await load_nvd(session, cves)
+        analyzed = await load_analyzed(session)
 
-        # ── Phase 3: drain the NVD queue ──────────────────────────────────────────
-        print("Phase 3 — waiting for NVD lookups to complete…")
-        await nvd_queue.join()
-        for w in workers:
-            w.cancel()
-
-    update_readme()
+    write_api(out, advisories, nvd, analyzed)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--out", default=DEFAULT_OUT, help="output directory")
+    parser.add_argument("--limit", type=int, help="only scrape the first N advisories")
+    args = parser.parse_args()
+    asyncio.run(main(args.out, args.limit))

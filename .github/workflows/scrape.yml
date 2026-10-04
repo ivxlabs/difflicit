@@ -1,0 +1,41 @@
+name: scrape
+
+on:
+  schedule:
+    - cron: "0 0 * * 0" # weekly
+  workflow_dispatch: # run by hand after creating an analysis repo to refresh the "analyzed" flags
+
+concurrency:
+  group: scrape
+  cancel-in-progress: false
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version-file: scripts/pyproject.toml
+
+      - name: Scrape Apple advisories + NVD
+        working-directory: scripts
+        run: uv run main.py --out out/api
+        env:
+          ANALYSIS_ORG: ${{ github.repository_owner }}
+          GITHUB_TOKEN: ${{ github.token }}
+
+      # Any S3-compatible bucket works; for Cloudflare R2 the endpoint is https://<account-id>.r2.cloudflarestorage.com
+      - name: Publish to the CDN bucket
+        run: >
+          aws s3 sync scripts/out/api "s3://${{ vars.S3_BUCKET }}/${{ vars.S3_PREFIX || 'applesec/api' }}"
+          --endpoint-url "${{ vars.S3_ENDPOINT }}" --delete --no-progress
+          --cache-control "public, max-age=3600"
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          # R2 doesn't accept the newer default checksum headers from aws-cli.
+          AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+          AWS_RESPONSE_CHECKSUM_VALIDATION: when_required

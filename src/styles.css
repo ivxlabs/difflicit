@@ -1032,3 +1032,33 @@ a.toolbar-button:hover {
   box-shadow: var(--shadow);
   background: var(--bg);
 }
+
+/* ----------------------------------------------------------------- analyze */
+
+.btn.analyze {
+  flex: none;
+  margin-left: auto;
+  padding: 7px 26px;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  border-radius: 6px;
+}
+.choice {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  cursor: pointer;
+  line-height: 1.5;
+}
+.choice:has(input:checked) {
+  border-color: var(--accent);
+}
+.choice .options {
+  display: flex;
+  gap: 14px;
+  margin-top: 6px;
+}

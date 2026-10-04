@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import DOMPurify from "dompurify";
 import { AlertIcon, BookIcon, FileDiffIcon, LinkExternalIcon } from "@primer/octicons-react";
 import type { CveDetail, Repo } from "../types";
+import { CONNECT_LABEL } from "../lib/access";
 import { repoContent } from "../lib/github";
 import { useAsync } from "../lib/util";
 import { BlankSlate, Spinner } from "./BlankSlate";
@@ -20,10 +21,12 @@ interface Props {
   /** Path of the diff file on screen (from the URL); null shows the write-up. */
   file: string | null;
   onFile: (path: string | null) => void;
+  /** The main action, shown in the CVE header (Analyze). */
+  action: React.ReactNode;
 }
 
 /** A CVE's analysis: README write-up plus every *.diff / *.patch in the repo, GitHub Desktop style. */
-export function Analysis({ cve, org, repos, repo, error: reposError, file, onFile }: Props) {
+export function Analysis({ cve, org, repos, repo, error: reposError, file, onFile, action }: Props) {
   const [content, error] = useAsync(() => (repo ? repoContent(repo) : null), [repo]);
 
   const files = content?.files ?? [];
@@ -45,10 +48,10 @@ export function Analysis({ cve, org, repos, repo, error: reposError, file, onFil
     main = (
       <BlankSlate icon={<Skull size={48} />} title="Not analyzed yet">
         <p>
-          Analyses are GitHub repositories named after the CVE. Create <code>{`${org}/${cve.id}`}</code> to publish one,
-          or any repository named <code>{cve.id}</code> in your own account (private works too) and connect GitHub to
-          see it here. Put the write-up in <code>README.md</code> and the fix in <code>*.diff</code> or{" "}
-          <code>*.patch</code> files.
+          Analyses are GitHub repositories named after the CVE, published as <code>{`${org}/${cve.id}`}</code>. Press{" "}
+          <b>Analyze</b> to start your own, or {CONNECT_LABEL.toLowerCase()} to see one you already have (private works
+          too). The write-up goes in <code>README.md</code> and the fix in <code>*.diff</code> or <code>*.patch</code>{" "}
+          files.
         </p>
       </BlankSlate>
     );
@@ -102,7 +105,7 @@ export function Analysis({ cve, org, repos, repo, error: reposError, file, onFil
         )}
       </aside>
       <main className="main-panel">
-        <CveHeader cve={cve} />
+        <CveHeader cve={cve} action={action} />
         {main}
       </main>
     </div>

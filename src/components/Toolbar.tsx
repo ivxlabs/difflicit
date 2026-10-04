@@ -1,4 +1,3 @@
-import { useState } from "react";
 import {
   BugIcon,
   GitPullRequestIcon,
@@ -11,7 +10,6 @@ import {
 } from "@primer/octicons-react";
 import { INSTANCE, PRODUCT } from "../config";
 import type { CveDetail, Index, Repo, Viewer } from "../types";
-import { fork } from "../lib/github";
 import { uniqueBy } from "../lib/util";
 import { AccountMenu } from "../iam/AccountMenu";
 import { CvePicker } from "./CvePicker";
@@ -27,11 +25,12 @@ interface Props {
   cveId: string | null;
   repos: Repo[];
   repo: Repo | null;
+  /** The org's published analysis of this CVE, if any. */
+  upstream: Repo | null;
   file: string | null;
   viewer: Viewer | null;
   onPick: (id: string) => void;
   onRepo: (fullName: string) => void;
-  onForked: (repo: Repo) => void;
   onAccount: () => void;
 }
 
@@ -42,10 +41,9 @@ const RepoKindIcon = ({ repo }: { repo: Repo | null }) =>
   repo?.private ? <LockIcon size={16} /> : repo?.fork ? <RepoForkedIcon size={16} /> : <RepoIcon size={16} />;
 
 export function Toolbar(props: Props) {
-  const { index, mine, cve, cveId, repos, repo, file, viewer, onPick, onRepo, onAccount } = props;
+  const { index, mine, cve, cveId, repos, repo, upstream, file, viewer, onPick, onRepo, onAccount } = props;
   const org = index?.org ?? "";
   const advisories = uniqueBy(cve?.entries ?? [], (e) => e.advisory_id);
-  const upstream = repos.find((r) => r.owner.login === org) ?? null;
 
   return (
     <header className="toolbar">
@@ -161,51 +159,18 @@ export function Toolbar(props: Props) {
   );
 }
 
-/** Fork → Create pull request, like GitHub Desktop's primary action button. */
-function ContributeButton({ upstream, repos, viewer, onForked, onAccount }: Props & { upstream: Repo }) {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  if (!viewer) {
-    return <ToolbarButton icon={<RepoForkedIcon size={16} />} top="Contribute" main="Connect to fork" onClick={onAccount} />;
-  }
-
-  const mine = repos.find((r) => r.fork && r.owner.login.toLowerCase() === viewer.login.toLowerCase());
-  if (mine) {
-    const branch = upstream.default_branch;
-    return (
-      <ToolbarButton
-        icon={<GitPullRequestIcon size={16} />}
-        top={mine.full_name}
-        main="Create pull request"
-        href={`https://github.com/${upstream.full_name}/compare/${branch}...${mine.owner.login}:${mine.name}:${mine.default_branch}`}
-        title="Open a pull request from your fork on GitHub"
-      />
-    );
-  }
-
-  const onFork = async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      const repo = await fork(upstream.full_name);
-      onForked(repo);
-      window.open(repo.html_url, "_blank", "noreferrer");
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  };
-
+/** Once the user has forked the published analysis: send their changes back, like GitHub Desktop's primary action. */
+function ContributeButton({ upstream, repos, viewer }: Props & { upstream: Repo }) {
+  const mine = viewer && repos.find((r) => r.fork && r.owner.login.toLowerCase() === viewer.login.toLowerCase());
+  if (!mine) return null;
+  const branch = upstream.default_branch;
   return (
     <ToolbarButton
-      icon={<RepoForkedIcon size={16} />}
-      top={error ? "Fork failed" : `Fork ${upstream.full_name}`}
-      main={busy ? "Forking…" : "Fork to analyze"}
-      onClick={onFork}
-      disabled={busy}
-      title={error ?? "Fork this analysis into your GitHub account"}
+      icon={<GitPullRequestIcon size={16} />}
+      top={mine.full_name}
+      main="Create pull request"
+      href={`https://github.com/${upstream.full_name}/compare/${branch}...${mine.owner.login}:${mine.name}:${mine.default_branch}`}
+      title="Open a pull request from your fork on GitHub"
     />
   );
 }

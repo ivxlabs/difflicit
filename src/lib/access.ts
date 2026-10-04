@@ -37,4 +37,7 @@ const patAccess: Access = {
 /** Sign In builds (see vite.config.ts) use GitHub through iam.ivx.run; all others, the user's own token. */
 export const access: Access = __IAM__ ? ivxAccess : patAccess;
 
+/** What connecting is called in this build. */
+export const CONNECT_LABEL = __IAM__ ? "Sign In" : "Connect GitHub";
+
 export const useSignedIn = () => useSyncExternalStore(access.subscribe, access.snapshot);

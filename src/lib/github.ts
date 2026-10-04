@@ -1,6 +1,6 @@
 import { GITHUB_API } from "../config";
 import type { Repo, RepoContent, Viewer } from "../types";
-import { access } from "./access";
+import { CONNECT_LABEL, access } from "./access";
 import { parseUnifiedDiff } from "./diff";
 import { cached, uniqueBy } from "./util";
 
@@ -15,10 +15,10 @@ async function gh(path: string, init: RequestInit & { accept?: string } = {}): P
     throw new Error(
       auth
         ? "GitHub API rate limit reached. Try again in a few minutes."
-        : "GitHub's anonymous rate limit (60 requests/hour) is used up. Connect GitHub to raise it.",
+        : `GitHub's anonymous rate limit (60 requests/hour) is used up. ${CONNECT_LABEL} to raise it.`,
     );
   }
-  if (res.status === 401 || res.status === 409) throw new Error("GitHub access expired. Connect GitHub again.");
+  if (res.status === 401 || res.status === 409) throw new Error(`GitHub access expired. ${CONNECT_LABEL} again.`);
   return res;
 }
 
@@ -48,6 +48,18 @@ export const viewer = async () =>
 export async function fork(fullName: string): Promise<Repo> {
   const res = await gh(`/repos/${fullName}/forks`, { method: "POST" });
   if (!res.ok) throw new Error(`GitHub refused the fork (${res.status}).`);
+  return res.json();
+}
+
+/** A new repository in the user's account for analysing a CVE, with a README to start from. */
+export async function createRepo(name: string, description: string, isPrivate: boolean): Promise<Repo> {
+  const res = await gh("/user/repos", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name, description, private: isPrivate, auto_init: true }),
+  });
+  if (res.status === 422) throw new Error(`You already have a repository named ${name}.`);
+  if (!res.ok) throw new Error(`GitHub refused to create the repository (${res.status}).`);
   return res.json();
 }
 

@@ -3,7 +3,8 @@ import { ChevronDownIcon, ChevronRightIcon } from "@primer/octicons-react";
 import { uniqueBy } from "../lib/util";
 import type { CveDetail } from "../types";
 
-export function CveHeader({ cve }: { cve: CveDetail }) {
+/** The CVE summary bar (click to expand), with the page's main action on the right. */
+export function CveHeader({ cve, action }: { cve: CveDetail; action?: React.ReactNode }) {
   const [open, setOpen] = useState(() => localStorage.getItem("difflicit-details") !== "closed");
   const toggle = () => {
     localStorage.setItem("difflicit-details", open ? "closed" : "open");
@@ -26,6 +27,7 @@ export function CveHeader({ cve }: { cve: CveDetail }) {
         )}
         {first?.component && <span className="pill">{first.component}</span>}
         <span className="impact">{first?.impact}</span>
+        {action}
       </div>
       {open && (
         <div className="cve-details">

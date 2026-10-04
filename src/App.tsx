@@ -9,6 +9,7 @@ import { cveRepos, myCveRepos, viewer as loadViewer } from "./lib/github";
 import { useRoute } from "./lib/route";
 import { uniqueBy, useAsync } from "./lib/util";
 import { Analysis } from "./components/Analysis";
+import { AnalyzeButton } from "./components/AnalyzeButton";
 import { BlankSlate, Spinner } from "./components/BlankSlate";
 import { StarButton } from "./components/StarButton";
 import { TokenDialog } from "./components/TokenDialog";
@@ -19,7 +20,8 @@ export function App({ signInError }: { signInError: string | null }) {
   const signedIn = useSignedIn();
   const [accountOpen, setAccountOpen] = useState(false);
   const [banner, setBanner] = useState(signInError);
-  const [forked, setForked] = useState<Repo[]>([]);
+  // Repos the user just forked or created: GitHub can take a moment to list them, so keep them meanwhile.
+  const [started, setStarted] = useState<Repo[]>([]);
 
   const [index, indexError] = useAsync(loadIndex, []);
   const [cve, cveError] = useAsync(() => (route.cve ? loadCve(route.cve) : null), [route.cve]);
@@ -40,9 +42,17 @@ export function App({ signInError }: { signInError: string | null }) {
   // A fresh fork can take a moment to show up in GitHub's fork list; keep it locally meanwhile.
   const repos =
     fetchedRepos &&
-    uniqueBy([...fetchedRepos, ...forked.filter((f) => f.name.toUpperCase() === route.cve)], (r) => r.full_name);
-  const repo =
-    repos?.find((r) => r.full_name === route.repo) ?? repos?.find((r) => r.owner.login === index?.org) ?? repos?.[0] ?? null;
+    uniqueBy([...fetchedRepos, ...started.filter((f) => f.name.toUpperCase() === route.cve)], (r) => r.full_name);
+  const upstream = repos?.find((r) => r.owner.login === index?.org) ?? null;
+  const repo = repos?.find((r) => r.full_name === route.repo) ?? upstream ?? repos?.[0] ?? null;
+  const connect = __IAM__ ? connectGitHub : () => setAccountOpen(true);
+
+  /** Analyze: show the user's repo here and open it on GitHub, where the analysis happens. */
+  const openRepo = (r: Repo) => {
+    setStarted((list) => [...list, r]);
+    navigate({ repo: r.full_name, file: null });
+    window.open(r.html_url, "_blank", "noreferrer");
+  };
 
   return (
     <div className="app">
@@ -53,12 +63,12 @@ export function App({ signInError }: { signInError: string | null }) {
         cveId={route.cve}
         repos={repos ?? []}
         repo={repo}
+        upstream={upstream}
         file={route.file}
         viewer={viewer}
         onPick={(id) => navigate({ cve: id, repo: null, file: null })}
         onRepo={(fullName) => navigate({ repo: fullName, file: null })}
-        onForked={(r) => setForked((f) => [...f, r])}
-        onAccount={__IAM__ ? connectGitHub : () => setAccountOpen(true)}
+        onAccount={connect}
       />
       {banner && (
         <div className="notice error banner" onClick={() => setBanner(null)} title="Dismiss">
@@ -86,6 +96,9 @@ export function App({ signInError }: { signInError: string | null }) {
           error={reposError}
           file={route.file}
           onFile={(file) => navigate({ file })}
+          action={
+            <AnalyzeButton cve={cve} repos={repos} upstream={upstream} viewer={viewer} onConnect={connect} onOpen={openRepo} />
+          }
         />
       )}
       {!__IAM__ && accountOpen && <TokenDialog current={viewer} onClose={() => setAccountOpen(false)} />}
@@ -103,8 +116,8 @@ function Welcome({ index }: { index: Index | null }) {
             , published as <code>{index.org}/CVE-YYYY-NNNN</code>
           </>
         )}
-        . Connect GitHub to bring in your own repositories, private ones included, or fork an analysis and send a pull
-        request.
+        . Press <b>Analyze</b> on any CVE to start your own, private or public, or fork a published analysis and send a
+        pull request.
       </p>
       {index && (
         <div className="stats">

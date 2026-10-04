@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import DOMPurify from "dompurify";
-import { AlertIcon, BookIcon, FileDiffIcon, LinkExternalIcon, MarkGithubIcon } from "@primer/octicons-react";
+import { AlertIcon, BookIcon, FileDiffIcon, LinkExternalIcon } from "@primer/octicons-react";
 import type { CveDetail, Repo } from "../types";
 import { repoContent } from "../lib/github";
 import { useAsync } from "../lib/util";
@@ -8,6 +8,7 @@ import { BlankSlate, Spinner } from "./BlankSlate";
 import { CveHeader } from "./CveHeader";
 import { DiffView } from "./DiffView";
 import { FileList } from "./FileList";
+import { Skull } from "./Skull";
 
 interface Props {
   cve: CveDetail;
@@ -42,7 +43,7 @@ export function Analysis({ cve, org, repos, repo, error: reposError, file, onFil
     main = <Spinner />;
   } else if (!repo) {
     main = (
-      <BlankSlate icon={<MarkGithubIcon size={48} className="big-icon" />} title="Not analyzed yet">
+      <BlankSlate icon={<Skull size={48} />} title="Not analyzed yet">
         <p>
           Analyses are GitHub repositories named after the CVE. Create <code>{`${org}/${cve.id}`}</code> to publish one,
           or any repository named <code>{cve.id}</code> in your own account (private works too) and connect GitHub to
@@ -80,7 +81,7 @@ export function Analysis({ cve, org, repos, repo, error: reposError, file, onFil
         {repo && (
           <>
             <a className="sidebar-header repo-link" href={repo.html_url} target="_blank" rel="noreferrer" title="Open on GitHub">
-              <MarkGithubIcon size={14} />
+              <Skull size={14} />
               <span className="grow mono">{repo.full_name}</span>
               <LinkExternalIcon size={12} />
             </a>

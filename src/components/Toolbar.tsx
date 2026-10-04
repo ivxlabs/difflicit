@@ -4,7 +4,6 @@ import {
   GitPullRequestIcon,
   LinkExternalIcon,
   LockIcon,
-  MarkGithubIcon,
   NoteIcon,
   RepoForkedIcon,
   RepoIcon,
@@ -17,6 +16,7 @@ import { uniqueBy } from "../lib/util";
 import { AccountMenu } from "../iam/AccountMenu";
 import { CvePicker } from "./CvePicker";
 import { ShareMenu } from "./ShareMenu";
+import { Skull } from "./Skull";
 import { StarButton } from "./StarButton";
 import { ToolbarButton, ToolbarDropdown } from "./ToolbarItem";
 
@@ -151,7 +151,7 @@ export function Toolbar(props: Props) {
         <AccountMenu viewer={viewer} />
       ) : (
         <ToolbarButton
-          icon={viewer ? <img className="avatar-img" src={viewer.avatar_url} alt="" /> : <MarkGithubIcon size={16} />}
+          icon={viewer ? <img className="avatar-img" src={viewer.avatar_url} alt="" /> : <Skull />}
           top={viewer ? viewer.login : "GitHub"}
           main={viewer ? "Connected" : "Connect GitHub"}
           onClick={onAccount}

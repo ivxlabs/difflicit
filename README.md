@@ -172,7 +172,7 @@ Difflicit is licensed under the [GNU General Public License, version 3 only](LIC
 
 ```
 Difflicit: patch diffing and analysis for CVEs
-Copyright (C) 2026 ivxlabs
+Copyright (C) 2026 ivx research (Vikrant Singh Chauhan)
 
 This program is free software: you can redistribute it and/or modify it under the terms of the
 GNU General Public License as published by the Free Software Foundation, version 3.

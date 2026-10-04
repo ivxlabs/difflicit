@@ -1063,3 +1063,37 @@ a.toolbar-button:hover {
   gap: 14px;
   margin-top: 6px;
 }
+.choice .small-note {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+}
+
+/* ----------------------------------------------------------------- embeds */
+
+.app.embed {
+  grid-template-rows: 1fr;
+}
+.app.embed .body {
+  grid-template-columns: 220px 1fr;
+}
+.btn.embed-open {
+  flex: none;
+  margin-left: auto;
+  color: var(--text);
+}
+.btn.embed-open:hover {
+  text-decoration: none;
+}
+/* Narrow embeds (an article column) show just the chosen file or write-up. */
+@media (max-width: 640px) {
+  .app.embed .body {
+    grid-template-columns: 1fr;
+  }
+  .app.embed .sidebar {
+    display: none;
+  }
+  .app.embed .cve-header-bar .impact {
+    display: none;
+  }
+}

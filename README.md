@@ -38,8 +38,8 @@ Apple's security advisories since 2020, enriched with NVD data, with a focus on 
 - 🧪 **Analyses live in Git.** An analysis is just a GitHub repository named after the CVE, with a write-up in
   `README.md` and the fix in `*.diff` / `*.patch` files. Fork it, improve it, send a pull request.
 - 🚀 **One button to start.** **Analyze** opens your repository for the CVE, or creates or forks one for you.
-- 🔗 **Shareable to the line.** The URL always describes what's on screen: CVE, repository and file. Copy it, or
-  post it to X or LinkedIn from the Share menu.
+- 🔗 **Shareable to the line.** The URL always describes what's on screen: CVE, repository and file. Copy it,
+  post it to X or LinkedIn, or **copy an embed code** to put the analysis right inside an article or blog post.
 - 🪶 **Featherweight.** A static site with no server or database. The CVE data is sharded so the browser only
   downloads the slice you're looking at.
 

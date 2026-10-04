@@ -5,10 +5,11 @@ import { uniqueBy } from "../lib/util";
 import type { CveDetail } from "../types";
 
 /** The CVE summary bar (click to expand), with the page's main action on the right. */
-export function CveHeader({ cve, action }: { cve: CveDetail; action?: React.ReactNode }) {
-  const [open, setOpen] = useState(() => localStorage.getItem("difflicit-details") !== "closed");
+export function CveHeader({ cve, action, compact }: { cve: CveDetail; action?: React.ReactNode; compact?: boolean }) {
+  // Compact (embeds) starts collapsed and doesn't remember the choice.
+  const [open, setOpen] = useState(() => !compact && localStorage.getItem("difflicit-details") !== "closed");
   const toggle = () => {
-    localStorage.setItem("difflicit-details", open ? "closed" : "open");
+    if (!compact) localStorage.setItem("difflicit-details", open ? "closed" : "open");
     setOpen(!open);
   };
   const first = cve.entries.find((e) => e.impact) ?? cve.entries[0];

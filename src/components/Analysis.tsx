@@ -22,12 +22,14 @@ interface Props {
   /** Path of the diff file on screen (from the URL); null shows the write-up. */
   file: string | null;
   onFile: (path: string | null) => void;
-  /** The main action, shown in the CVE header (Analyze). */
+  /** The main action, shown in the CVE header (Analyze, or "View on …" in embeds). */
   action: React.ReactNode;
+  /** Embedded in another page: CVE details start collapsed. */
+  compact?: boolean;
 }
 
 /** A CVE's analysis: README write-up plus every *.diff / *.patch in the repo, GitHub Desktop style. */
-export function Analysis({ cve, org, repos, repo, error: reposError, file, onFile, action }: Props) {
+export function Analysis({ cve, org, repos, repo, error: reposError, file, onFile, action, compact }: Props) {
   const [content, error] = useAsync(() => (repo ? repoContent(repo) : null), [repo]);
 
   const files = content?.files ?? [];
@@ -105,7 +107,7 @@ export function Analysis({ cve, org, repos, repo, error: reposError, file, onFil
         )}
       </aside>
       <main className="main-panel">
-        <CveHeader cve={cve} action={action} />
+        <CveHeader cve={cve} action={action} compact={compact} />
         {main}
       </main>
     </div>

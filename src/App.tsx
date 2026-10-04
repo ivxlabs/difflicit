@@ -7,7 +7,7 @@ import { INSTANCE, PRODUCT } from "./config";
 import { connectGitHub } from "./iam/session";
 import { useSignedIn } from "./lib/access";
 import { cveRepos, myCveRepos, viewer as loadViewer } from "./lib/github";
-import { useRoute } from "./lib/route";
+import { urlFor, useRoute } from "./lib/route";
 import { uniqueBy, useAsync } from "./lib/util";
 import { Analysis } from "./components/Analysis";
 import { AnalyzeButton } from "./components/AnalyzeButton";
@@ -26,10 +26,12 @@ export function App({ signInError }: { signInError: string | null }) {
 
   const [index, indexError] = useAsync(loadIndex, []);
   const [cve, cveError] = useAsync(() => (route.cve ? loadCve(route.cve) : null), [route.cve]);
-  const [viewer] = useAsync(() => (signedIn ? loadViewer() : null), [signedIn]);
+  // Embeds are read-only and anonymous: nothing about the reader is loaded.
+  const signedInHere = signedIn && !route.embed;
+  const [viewer] = useAsync(() => (signedInHere ? loadViewer() : null), [signedInHere]);
   const [mine] = useAsync(
-    () => (signedIn ? myCveRepos().then((rs) => new Set(rs.map((r) => r.name.toUpperCase()))) : null),
-    [signedIn],
+    () => (signedInHere ? myCveRepos().then((rs) => new Set(rs.map((r) => r.name.toUpperCase()))) : null),
+    [signedInHere],
   );
   const [fetchedRepos, reposError] = useAsync(
     () => (route.cve && index ? cveRepos(index.org, route.cve) : null),
@@ -54,6 +56,34 @@ export function App({ signInError }: { signInError: string | null }) {
     navigate({ repo: r.full_name, file: null });
     window.open(r.html_url, "_blank", "noreferrer");
   };
+
+  if (route.embed) {
+    return (
+      <div className="app embed">
+        {cveError || indexError ? (
+          <BlankSlate icon={<BugIcon size={32} className="big-icon" />} title={cveError ? `${route.cve} isn't tracked` : "Couldn't load"} />
+        ) : !cve || !index ? (
+          <Spinner />
+        ) : (
+          <Analysis
+            cve={cve}
+            org={index.org}
+            repos={repos}
+            repo={repo}
+            error={reposError}
+            file={route.file}
+            onFile={(file) => navigate({ file })}
+            compact
+            action={
+              <a className="btn embed-open" href={urlFor({ embed: false })} target="_blank" rel="noreferrer">
+                {INSTANCE.icon} View on {INSTANCE.name}
+              </a>
+            }
+          />
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="app">

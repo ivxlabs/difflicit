@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 import { useState } from "react";
 import { RepoForkedIcon, RepoIcon, XIcon } from "@primer/octicons-react";
+import { githubStatus, iamAccountUrl } from "../iam/session";
 import { createRepo, fork } from "../lib/github";
+import { useAsync } from "../lib/util";
 import type { CveDetail, Repo, Viewer } from "../types";
 
 interface Props {
@@ -52,7 +54,11 @@ export function AnalyzeButton({ cve, repos, upstream, viewer, onConnect, onOpen 
 
 function StartDialog({ cve, upstream, viewer, onClose, onOpen }: Pick<Props, "cve" | "upstream" | "onOpen"> & { viewer: Viewer; onClose: () => void }) {
   const [how, setHow] = useState<"fork" | "create">(upstream ? "fork" : "create");
-  const [isPrivate, setPrivate] = useState(true);
+  const [wantPrivate, setPrivate] = useState(true);
+  // Sign In builds know what the user allowed on iam; a private repo needs private-repository access there.
+  const [status] = useAsync(() => (__IAM__ ? githubStatus() : null), []);
+  const canPrivate = !__IAM__ || Boolean(status?.scopes?.includes("repo"));
+  const isPrivate = wantPrivate && canPrivate;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -108,12 +114,21 @@ function StartDialog({ cve, upstream, viewer, onClose, onOpen }: Pick<Props, "cv
               <span className="muted"> and start from scratch.</span>
               {how === "create" && (
                 <span className="options">
-                  <label>
-                    <input type="radio" checked={isPrivate} onChange={() => setPrivate(true)} /> Private
+                  <label title={canPrivate ? undefined : "Needs private-repository access on your ivx account"}>
+                    <input type="radio" checked={isPrivate} disabled={!canPrivate} onChange={() => setPrivate(true)} /> Private
                   </label>
                   <label>
                     <input type="radio" checked={!isPrivate} onChange={() => setPrivate(false)} /> Public
                   </label>
+                </span>
+              )}
+              {how === "create" && !canPrivate && (
+                <span className="muted small-note">
+                  You allowed ivx public repositories only.{" "}
+                  <a href={iamAccountUrl()} target="_blank" rel="noreferrer">
+                    Include private ones
+                  </a>{" "}
+                  to create a private repository.
                 </span>
               )}
             </span>

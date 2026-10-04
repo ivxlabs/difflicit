@@ -7,6 +7,8 @@ export interface Route {
   repo: string | null;
   /** Path of the diff file to show; null means the write-up. */
   file: string | null;
+  /** Compact, read-only layout for embedding in other pages (an <iframe>). */
+  embed: boolean;
 }
 
 // Hash routes (#/cve/CVE-2024-54494?repo=owner/name&file=path) work on static hosting without server rewrites,
@@ -15,7 +17,7 @@ function parse(): Route {
   const [path, query] = location.hash.replace(/^#/, "").split("?");
   const m = /^\/cve\/(CVE-\d{4}-\d+)/i.exec(path);
   const params = new URLSearchParams(query);
-  return { cve: m ? m[1].toUpperCase() : null, repo: params.get("repo"), file: params.get("file") };
+  return { cve: m ? m[1].toUpperCase() : null, repo: params.get("repo"), file: params.get("file"), embed: params.has("embed") };
 }
 
 function format(r: Route): string {
@@ -23,9 +25,13 @@ function format(r: Route): string {
   const params = new URLSearchParams();
   if (r.repo) params.set("repo", r.repo);
   if (r.file) params.set("file", r.file);
+  if (r.embed) params.set("embed", "1");
   const q = params.toString().replace(/%2F/g, "/");
   return `#/cve/${r.cve}${q ? `?${q}` : ""}`;
 }
+
+/** An absolute link to a view, e.g. the current one with `{ embed: true }`. */
+export const urlFor = (next: Partial<Route>) => location.origin + location.pathname + format({ ...parse(), ...next });
 
 export function useRoute() {
   const [route, setRoute] = useState<Route>(parse);

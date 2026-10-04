@@ -20,7 +20,8 @@ export function ShareMenu({ cve, repo, file }: Props) {
   const text = `${subject}${impact ? `: ${impact}` : ""}`.slice(0, 200) + ` · patch analysis on ${INSTANCE.name}`;
 
   const link = urlFor({ embed: false });
-  const embedCode = `<iframe src="${urlFor({ embed: true })}" title="${`${subject} · ${INSTANCE.name}`.replace(/"/g, "&quot;")}" width="100%" height="560" style="border: 0; border-radius: 8px" loading="lazy"></iframe>`;
+  const embedCode = `<iframe src="${urlFor({ embed: true })}" title="${`${subject} · ${INSTANCE.name}`.replace(/"/g, "&quot;")}" width="100%" height="560" style="height: 560px !important; max-width: 100%; border: 0; border-radius: 8px" loading="lazy"></iframe>`;
+  // The inline !important matters: many blog themes give every iframe `height: auto`, which collapses it to 150px.
 
   const copy = async (what: "link" | "embed") => {
     await navigator.clipboard.writeText(what === "link" ? link : embedCode);

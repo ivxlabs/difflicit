@@ -1077,6 +1077,13 @@ a.toolbar-button:hover {
 .app.embed .body {
   grid-template-columns: 220px 1fr;
 }
+/* No analysis repository: nothing to list, so give the space to the message. */
+.app.embed .body:has(> .sidebar:empty) {
+  grid-template-columns: 1fr;
+}
+.app.embed .sidebar:empty {
+  display: none;
+}
 .btn.embed-open {
   flex: none;
   margin-left: auto;

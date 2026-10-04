@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 import { defineConfig, loadEnv, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import instance from "./difflicit.config.json";

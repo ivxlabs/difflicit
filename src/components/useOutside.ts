@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 import { useEffect, type RefObject } from "react";
 
 /** Close a dropdown on outside click or Escape. */

@@ -3,7 +3,7 @@ name: pages
 on:
   push:
     branches: [main]
-    paths-ignore: ["scripts/**", "*.md"]
+    paths-ignore: ["scripts/**", "docs/**", "*.md"]
   workflow_dispatch:
 
 permissions:

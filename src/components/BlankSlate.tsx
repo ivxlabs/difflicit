@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 import { SyncIcon } from "@primer/octicons-react";
 
 /** The centered empty / error / loading state used across the app. */

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 import { DiffAddedIcon, DiffModifiedIcon, DiffRemovedIcon, DiffRenamedIcon } from "@primer/octicons-react";
 import type { DiffFile } from "../lib/diff";
 import { DiffStat } from "./DiffView";

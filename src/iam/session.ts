@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 // "Sign In" with an ivx account (iam.ivx.run, a Supabase OAuth 2.1 / OpenID Connect provider) as a public
 // client: authorization code + PKCE, entirely in the browser. GitHub is then used through iam's /api/github
 // proxy, which holds the user's GitHub token; this app never sees it.

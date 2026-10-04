@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 export type LineType = "context" | "add" | "del" | "hunk";
 
 export interface DiffLine {

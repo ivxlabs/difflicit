@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 import { useCallback, useEffect, useRef, useState } from "react";
 import { TriangleDownIcon } from "@primer/octicons-react";
 import { useOutside } from "./useOutside";

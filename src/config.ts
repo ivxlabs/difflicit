@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 // Every build setting, read in one place. The instance's settings come from difflicit.config.json;
 // API_BASE and PROJECT_REPO can be overridden by environment variables (see vite.config.ts).
 import instance from "../difflicit.config.json";

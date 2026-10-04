@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-only
 """
 Scrape Apple security advisories + NVD metadata into the static JSON API Difflicit reads.
 

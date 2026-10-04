@@ -1,99 +1,185 @@
-# Difflicit
+<div align="center">
 
-Patch diffing and analysis for CVEs. **ivx/xnu** (Apple CVEs, at xnu.ivx.run) is the instance this repository runs. Pick a CVE, see what Apple and NVD say about it, and read the patch
-that fixed it in a GitHub Desktop-style diff viewer. Bring your own analyses: any GitHub repository named after a
-CVE shows up next to it, private ones included.
+# 💀 Difflicit
 
-It is a static site: no server, no database, no accounts.
+**Patch diffing and analysis for CVEs.**
 
-## How it works
+Pick a CVE, read what the vendor and NVD say about it, and open the patch that fixed it<br>
+in a diff viewer that feels like GitHub Desktop. Bring your own analyses, private ones included.
+
+[![Live instance](https://img.shields.io/badge/live-xnu.ivx.run-0366d6?style=flat-square)](https://xnu.ivx.run)
+[![License: GPL-3.0-only](https://img.shields.io/badge/license-GPL--3.0--only-3fb950?style=flat-square)](LICENSE)
+[![Static site](https://img.shields.io/badge/hosting-GitHub%20Pages-24292e?style=flat-square&logo=github)](#-run-your-own-instance)
+[![Vite + React](https://img.shields.io/badge/built%20with-Vite%20%2B%20React-646cff?style=flat-square&logo=vite&logoColor=white)](https://vite.dev)
+
+[**Open ivx/xnu →**](https://xnu.ivx.run) · [How it works](#-how-it-works) · [Write an analysis](#-write-an-analysis) · [Run your own](#-run-your-own-instance)
+
+<br>
+
+<img src="docs/screenshots/diff.png" alt="Difflicit's diff viewer: a file list on the left and a side-by-side diff of osfmk/vm/vm_map.c on the right" width="100%">
+
+<sub>The diff viewer, showing XNU's <code>osfmk/vm</code> changes between <code>xnu-11215.41.3</code> and <code>xnu-11215.61.5</code> as sample data.</sub>
+
+</div>
+
+---
+
+**ivx/xnu** is the Difflicit instance this repository runs at [xnu.ivx.run](https://xnu.ivx.run): every CVE from
+Apple's security advisories since 2020, enriched with NVD data, with a focus on XNU and its neighbours.
+
+## ✨ What you get
+
+- 🔎 **Every CVE at your fingertips.** Search by id, component or impact; filter by severity, platform, year and
+  whether anyone has analyzed it yet. Press <kbd>⌘</kbd> <kbd>K</kbd> anywhere.
+- 🧾 **Vendor and NVD side by side.** Apple's component, impact and credit next to the CVSS vector, CWE and
+  references, and every advisory the fix shipped in.
+- 🪓 **A real diff viewer.** Unified or split, line numbers, hunks, and files with tens of thousands of lines that
+  scroll as smoothly as small ones: only the rows on screen are rendered.
+- 🧪 **Analyses live in Git.** An analysis is just a GitHub repository named after the CVE, with a write-up in
+  `README.md` and the fix in `*.diff` / `*.patch` files. Fork it, improve it, send a pull request.
+- 🚀 **One button to start.** **Analyze** opens your repository for the CVE, or creates or forks one for you.
+- 🔗 **Shareable to the line.** The URL always describes what's on screen: CVE, repository and file. Copy it, or
+  post it to X or LinkedIn from the Share menu.
+- 🪶 **Featherweight.** A static site with no server or database. The CVE data is sharded so the browser only
+  downloads the slice you're looking at.
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/cve-picker.png" alt="The CVE picker, filtered to kernel components in 2026"></td>
+    <td width="50%"><img src="docs/screenshots/cve.png" alt="A CVE page with Apple's and NVD's details and the Analyze button"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>Find a CVE: filters, scopes, and a year or component per download.</sub></td>
+    <td align="center"><sub>What Apple and NVD say, every advisory it shipped in, and <b>Analyze</b>.</sub></td>
+  </tr>
+</table>
+
+## 🧭 How it works
 
 ```
-GitHub Actions (weekly)                        Browser (this Vite app, on GitHub Pages)
-  scripts/main.py                                │
-  Apple advisories + NVD ──► JSON ──► CDN ──────►│  CVE list + details   (cdn.ivx.run/applesec/api)
-                                                 │
-  GitHub repos named CVE-YYYY-NNNN ─────────────►│  write-ups + diffs    (api.github.com, directly)
+ GitHub Actions (weekly)                              Your browser (Difflicit, on GitHub Pages)
+ ───────────────────────                              ─────────────────────────────────────────
+ scripts/main.py
+   Apple advisories ─┐
+   NVD feeds ────────┼─► static JSON ─► CDN (R2) ───► CVE list and details
+   GitHub repo list ─┘                                 cdn.ivx.run/applesec/api
+
+ GitHub repositories named CVE-YYYY-NNNN ────────────► write-ups and diffs
+                                                        straight from GitHub
 ```
 
-- **CVE data**: the scrape workflow writes a static JSON API and syncs it to an S3-compatible bucket behind a CDN.
-  It is sharded so a browser only downloads the slice it is looking at:
-  - `index.json`: totals and the list of shards (a few KB).
-  - `years/2026.json`: summaries of the CVEs whose id is `CVE-2026-*` (severity, components, impact, platforms,
-    analyzed). Typing a CVE id loads its year.
-  - `components/kernel.json`: the same, for every CVE Apple lists under one component, all years.
-  - `cves/CVE-YYYY-NNNN.json`: the NVD data and every Apple advisory entry for one CVE.
-- **Analyses** are GitHub repositories named `CVE-YYYY-NNNN`. The app renders `README.md` as the write-up and every
-  `*.diff` / `*.patch` file in the diff viewer. It looks in:
-  - `<org>/CVE-…`, the published analysis (org = owner of the repo this site is built from, e.g. `ivxlabs`)
-  - that repo's forks
-  - with a token connected: every repo the token can see with that name, private ones included
-- **Contributing**: connect GitHub, fork an analysis, push your changes, and open a pull request. Merged changes
-  show up immediately.
-- **GitHub access**, two ways, chosen at build time:
-  - *Bring your own token* (default): a GitHub personal access token, kept in the browser's local storage and only
-    ever sent to `api.github.com`.
-  - *Sign In*: builds that set the three `SUPABASE_URL`, `SUPABASE_CLIENT_ID` and `IAM_URL` repository
-    variables sign users in with their ivx account ([iam.ivx.run](https://iam.ivx.run), OAuth 2.1 + PKCE) and use
-    GitHub through iam's `/api/github` proxy, which holds the GitHub token; the browser never sees it. Without those
-    variables none of this code is in the build.
+**CVE data.** Once a week the `scrape` workflow fetches Apple's advisories and the NVD feeds, writes a static JSON
+API, and syncs it to an S3-compatible bucket. Only files whose content changed are uploaded. The API is sharded:
 
-  Without either, GitHub allows 60 anonymous API requests an hour.
+| File | Contents |
+| --- | --- |
+| `index.json` | Totals and the list of shards (a few KB, always revalidated) |
+| `years/2026.json` | Summaries of every `CVE-2026-*`. Typing a CVE id loads its year |
+| `components/kernel.json` | The same for one component, across all years |
+| `cves/CVE-2026-12345.json` | NVD data and every advisory entry for one CVE |
 
-## Configuring an instance
+**Analyses.** For each CVE, Difflicit looks on GitHub for:
 
-An instance is set up in `difflicit.config.json`:
+- `<org>/CVE-…`, the published analysis (the org owns the repository the site is built from, e.g. `ivxlabs`);
+- that repository's forks;
+- once you're connected, every repository you can see that is named after the CVE, private ones included.
+
+## 🔬 Write an analysis
+
+1. Open a CVE and press **Analyze**. Difflicit signs you in if needed, then opens your repository for that CVE,
+   or offers to **fork** the published analysis or **create** `you/CVE-YYYY-NNNN` (private or public).
+2. Write up the root cause in `README.md`, and add the fix as one or more `*.diff` / `*.patch` files: `git diff`,
+   `git format-patch` and `diff -u` output all work.
+3. Push. Your analysis shows up in Difflicit straight away, under **Repository**.
+4. Working from a fork? **Create pull request** sends it back. Once merged, everyone sees it.
+
+## 🔐 GitHub access and privacy
+
+How Difflicit reaches GitHub on your behalf is chosen when the site is built:
+
+| | Bring your own token (default) | Sign In (e.g. xnu.ivx.run) |
+| --- | --- | --- |
+| How | Paste a GitHub personal access token | Sign in with an [ivx account](https://iam.ivx.run) (OAuth 2.1 + PKCE) |
+| Where the GitHub token lives | Your browser's local storage, sent only to `api.github.com` | Encrypted at iam.ivx.run, which calls GitHub for you; the browser never sees it |
+| Enabled by | Nothing, it's always there | The `SUPABASE_URL`, `SUPABASE_CLIENT_ID` and `IAM_URL` variables. Without them none of this code is built |
+
+Anonymous visitors can read every public analysis; GitHub limits them to 60 API requests an hour.
+
+README HTML from analysis repositories is sanitized before it is shown, and a Content Security Policy restricts
+where the page can load scripts from and send data to.
+
+## 🛠 Run your own instance
+
+Difflicit is generic: point it at your own data and repositories and it becomes your instance.
+
+### Configure it
+
+`difflicit.config.json` holds everything specific to an instance:
 
 | Key | What |
 | --- | --- |
 | `name` | Shown under the Difflicit logo, in page titles and in shared posts, e.g. `ivx/xnu` |
 | `icon` | Shown next to the name, e.g. `💀` |
-| `apiBase` | Where the JSON API lives; the `API_BASE` repository variable overrides it |
-| `projectRepo` | The repository the Star button points at; CI uses the repository being built instead |
+| `apiBase` | Where the JSON API lives (overridden by the `API_BASE` repository variable) |
+| `projectRepo` | The repository the Star button points at (CI uses the repository being built) |
 
-## Local development
+### Develop locally
 
 ```sh
 npm install
-(cd scripts && uv run main.py --out ../public/api)   # or add --limit 20 for a quick sample
+(cd scripts && uv run main.py --out ../public/api)   # add --limit 20 for a quick sample
 VITE_API_BASE=/api npm run dev
 ```
 
-To try "Sign In" locally, also set `VITE_SUPABASE_URL`, `VITE_SUPABASE_CLIENT_ID` and `VITE_IAM_URL`
-(e.g. in `.env.local`), and add `http://localhost:5173` to iam's `GITHUB_ORIGINS` in its `.dev.vars`.
+- `ANALYSIS_ORG=<account>` makes the scrape mark CVEs as analyzed from another account's `CVE-*` repositories.
+- To try Sign In locally, set `VITE_SUPABASE_URL`, `VITE_SUPABASE_CLIENT_ID` and `VITE_IAM_URL` (e.g. in
+  `.env.local`) and add `http://localhost:5173` to iam's `GITHUB_ORIGINS`. The build prints whether Sign In is on.
 
-Set `ANALYSIS_ORG=<account>` for the scrape to mark CVEs as analyzed from another account's `CVE-*` repos.
+### Deploy it
 
-## Deploying
-
-**GitHub Pages:** *Settings → Pages → Source: GitHub Actions*, and optionally a custom domain (e.g. `xnu.ivx.run`).
+**1. The site, on GitHub Pages.** *Settings → Pages → Source: GitHub Actions*, plus a custom domain if you like.
 `.github/workflows/pages.yml` builds and deploys on every push to `main`.
 
-**JSON API on Cloudflare R2** (any S3-compatible storage works):
+**2. The data, on Cloudflare R2** (any S3-compatible storage works):
 
-1. Create a bucket and connect a custom domain to it (e.g. `cdn.ivx.run`).
-2. Add a CORS rule allowing `GET` from the site's origin (e.g. `https://xnu.ivx.run`).
-3. Create an R2 API token with *Object Read & Write* on that bucket.
-4. In the GitHub repo, set:
-   - **variables**:
-     - `S3_ENDPOINT`: `https://<account-id>.r2.cloudflarestorage.com`
-     - `S3_BUCKET`: the bucket name
-     - `S3_PREFIX`: optional, defaults to `applesec/api`
-     - `API_BASE`: optional, defaults to `https://cdn.ivx.run/applesec/api`
-   - **secrets**: `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`
-5. Run the `scrape` workflow once by hand. It then runs weekly; run it again after publishing a new analysis repo to
-   refresh the "analyzed" flags (the CVE page itself always checks GitHub live).
+1. Create a bucket, connect a custom domain (e.g. `cdn.ivx.run`), and add a CORS rule allowing `GET` from your site.
+2. Create an R2 API token with *Object Read & Write* on the bucket.
+3. Add these to the repository (*Settings → Secrets and variables → Actions*; either tab works):
 
-**Sign In** (optional, for the hosted xnu.ivx.run):
+   | Name | Value |
+   | --- | --- |
+   | `S3_ENDPOINT` | `https://<account-id>.r2.cloudflarestorage.com` |
+   | `S3_BUCKET` | The bucket name |
+   | `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` | From the R2 API token (as **secrets**) |
+   | `S3_PREFIX` | Optional, defaults to `applesec/api` |
+   | `API_BASE` | Optional, defaults to `apiBase` from the config file |
 
-1. In Supabase, *Authentication → OAuth Server → Clients*: add a **public** client (no secret) for the site, with
-   redirect URI `https://xnu.ivx.run/` (and `http://localhost:5173/` for development).
-2. In iam.ivx.run's `wrangler.jsonc`, add the client id to `GITHUB_CLIENTS` and the site to `GITHUB_ORIGINS`.
-3. In this repo, set the variables `SUPABASE_URL` (`https://<project>.supabase.co`), `SUPABASE_CLIENT_ID` and
-   `IAM_URL` (`https://iam.ivx.run`).
+4. Run the `scrape` workflow once by hand. After that it runs weekly; run it again after publishing a new analysis
+   to refresh the "analyzed" flags (a CVE's own page always checks GitHub live).
 
-Users then allow GitHub access once, on their ivx account page.
+**3. Sign In** (optional, needs an [iam.ivx.run](https://iam.ivx.run) deployment):
 
-## License
+1. In Supabase, *Authentication → OAuth Server → Clients*: add a **public** client with redirect URI
+   `https://<your site>/`.
+2. In iam's `wrangler.jsonc`, add the client id to `GITHUB_CLIENTS` and your site to `GITHUB_ORIGINS`.
+3. Set `SUPABASE_URL`, `SUPABASE_CLIENT_ID` and `IAM_URL` in this repository and rebuild.
 
-[GPL-3.0-only](LICENSE)
+Users then allow GitHub access once, from their ivx account page.
+
+## 📄 License
+
+Difflicit is licensed under the [GNU General Public License, version 3 only](LICENSE) (`GPL-3.0-only`).
+
+```
+Difflicit: patch diffing and analysis for CVEs
+Copyright (C) 2026 ivxlabs
+
+This program is free software: you can redistribute it and/or modify it under the terms of the
+GNU General Public License as published by the Free Software Foundation, version 3.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without
+even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+General Public License for more details.
+```
+
+<div align="center"><sub>Made with 💀 by <a href="https://github.com/ivxlabs">ivxlabs</a></sub></div>

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 import { MarkGithubIcon, StarIcon } from "@primer/octicons-react";
 import { PROJECT_REPO } from "../config";
 import { getRepo } from "../lib/github";

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CheckIcon, LockIcon, RepoIcon, SearchIcon, SyncIcon } from "@primer/octicons-react";
 import { loadShard } from "../api";

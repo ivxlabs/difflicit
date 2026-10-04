@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 import { GITHUB_API } from "../config";
 import type { Repo, RepoContent, Viewer } from "../types";
 import { CONNECT_LABEL, access } from "./access";

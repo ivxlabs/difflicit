@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ColumnsIcon, RowsIcon } from "@primer/octicons-react";
 import { diffLines, toSplitRows, type DiffFile, type DiffLine, type SplitRow } from "../lib/diff";

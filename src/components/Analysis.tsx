@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 import { useMemo } from "react";
 import DOMPurify from "dompurify";
 import { AlertIcon, BookIcon, FileDiffIcon, LinkExternalIcon } from "@primer/octicons-react";
@@ -49,8 +50,7 @@ export function Analysis({ cve, org, repos, repo, error: reposError, file, onFil
       <BlankSlate icon={<Skull size={48} />} title="Not analyzed yet">
         <p>
           Analyses are GitHub repositories named after the CVE, published as <code>{`${org}/${cve.id}`}</code>. Press{" "}
-          <b>Analyze</b> to start your own, or {CONNECT_LABEL.toLowerCase()} to see one you already have (private works
-          too). The write-up goes in <code>README.md</code> and the fix in <code>*.diff</code> or <code>*.patch</code>{" "}
+          <b>Analyze</b> to start your own, or <b>{CONNECT_LABEL}</b> to see one you already have (private works too). The write-up goes in <code>README.md</code> and the fix in <code>*.diff</code> or <code>*.patch</code>{" "}
           files.
         </p>
       </BlankSlate>

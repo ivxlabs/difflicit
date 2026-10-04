@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 import { API_BASE } from "./config";
 import { cached } from "./lib/util";
 import type { CveDetail, CveSummary, Index } from "./types";

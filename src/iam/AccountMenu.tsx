@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 import { AlertIcon, LinkExternalIcon, PersonIcon, SignOutIcon } from "@primer/octicons-react";
 import { ToolbarButton, ToolbarDropdown } from "../components/ToolbarItem";
 import { useSignedIn } from "../lib/access";

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-only
 import type { DiffFile } from "./lib/diff";
 
 // Shapes of the static JSON API written by scripts/main.py.

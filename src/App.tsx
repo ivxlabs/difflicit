@@ -109,7 +109,7 @@ function Welcome({ index }: { index: Index | null }) {
       {index && (
         <div className="stats">
           <div>
-            <b>{index.cves.length.toLocaleString()}</b>
+            <b>{index.cves.toLocaleString()}</b>
             <span className="muted">CVEs</span>
           </div>
           <div>
@@ -117,7 +117,7 @@ function Welcome({ index }: { index: Index | null }) {
             <span className="muted">advisories</span>
           </div>
           <div>
-            <b>{index.cves.filter((c) => c.analyzed).length.toLocaleString()}</b>
+            <b>{index.analyzed.toLocaleString()}</b>
             <span className="muted">analyzed</span>
           </div>
         </div>

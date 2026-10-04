@@ -1,3 +1,5 @@
+import type { DiffFile } from "./lib/diff";
+
 // Shapes of the static JSON API written by scripts/main.py.
 
 export type Severity = "Critical" | "High" | "Medium" | "Low";
@@ -14,11 +16,24 @@ export interface CveSummary {
   analyzed: boolean;
 }
 
+/** A slice of the CVE list in its own file: one year (by CVE id) or one component. */
+export interface Shard {
+  name: string;
+  file: string;
+  count: number;
+}
+
+/** index.json: totals and the shards, so the browser only downloads the slice it is looking at. */
 export interface Index {
   generated: string;
   org: string;
   advisories: number;
-  cves: CveSummary[];
+  cves: number;
+  analyzed: number;
+  /** Newest first. */
+  years: Shard[];
+  /** Largest first. */
+  components: Shard[];
 }
 
 export interface CveEntry {
@@ -61,7 +76,8 @@ export interface Repo {
 
 export interface RepoContent {
   readme_html: string | null;
-  patches: { path: string; content: string }[];
+  /** Every file changed by the repo's *.diff / *.patch files, in order. */
+  files: DiffFile[];
 }
 
 // Components treated as "kernel & friends" by the default scope.

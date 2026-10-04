@@ -3,7 +3,6 @@ import DOMPurify from "dompurify";
 import { AlertIcon, BookIcon, FileDiffIcon, LinkExternalIcon, MarkGithubIcon } from "@primer/octicons-react";
 import type { CveDetail, Repo } from "../types";
 import { repoContent } from "../lib/github";
-import { parseUnifiedDiff } from "../lib/diff";
 import { useAsync } from "../lib/util";
 import { BlankSlate, Spinner } from "./BlankSlate";
 import { CveHeader } from "./CveHeader";
@@ -26,7 +25,7 @@ interface Props {
 export function Analysis({ cve, org, repos, repo, error: reposError, file, onFile }: Props) {
   const [content, error] = useAsync(() => (repo ? repoContent(repo) : null), [repo]);
 
-  const files = useMemo(() => content?.patches.flatMap((p) => parseUnifiedDiff(p.content)) ?? [], [content]);
+  const files = content?.files ?? [];
   const readme = useMemo(() => content?.readme_html && DOMPurify.sanitize(content.readme_html), [content]);
   const shownError = reposError ?? error;
   const found = file === null ? -1 : files.findIndex((f) => f.path === file);

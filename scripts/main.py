@@ -6,7 +6,9 @@ Scrape Apple security advisories + NVD metadata into the static JSON API Difflic
     uv run main.py --out ../public/api   # serve it to `npm run dev` (with VITE_API_BASE=/api)
 
 Output:
-    index.json            every CVE, summarised, plus which ones have an analysis repo
+    index.json            manifest: totals, and the year and component shards below
+    years/2026.json       summaries of the CVEs whose id is CVE-2026-*
+    components/kernel.json  summaries of the CVEs Apple lists under that component
     cves/CVE-….json       one file per CVE: NVD data + every advisory entry
 
 Environment:
@@ -21,6 +23,7 @@ import lzma
 import os
 import re
 import shutil
+import sys
 from datetime import datetime, timezone
 
 import aiohttp
@@ -48,6 +51,10 @@ FIELD_RE = re.compile(r"^(Impact|Description|Available for):\s*(.*)$")
 CVE_LINE_RE = re.compile(r"^(CVE-\d{4}-\d{4,7})(?::\s*(.*))?$")
 
 ANALYSIS_ORG = os.environ.get("ANALYSIS_ORG", "ivxlabs")
+
+# Every URL that couldn't be fetched. Output replaces what's published (the upload deletes what's gone),
+# so a run with any failure writes nothing rather than publishing partial data.
+FAILED: list[str] = []
 ANALYSIS_REPO_RE = re.compile(r"^CVE-\d{4}-\d{4,}$", re.I)
 
 
@@ -196,16 +203,10 @@ async def load_nvd(session: aiohttp.ClientSession, cves: set[str]) -> dict[str, 
     out: dict[str, dict] = {}
     for year in wanted_years:
         print(f"NVD {year}: downloading…")
-        try:
-            async with session.get(NVD_FEED_URL.format(year=year)) as res:
-                if res.status != 200:
-                    print(f"NVD {year}: HTTP {res.status}, skipping")
-                    continue
-                blob = await res.read()
-            data = json.loads(lzma.decompress(blob))
-        except Exception as e:  # noqa: BLE001 - one bad year shouldn't sink the run
-            print(f"NVD {year}: {e}")
+        blob = await fetch(session, NVD_FEED_URL.format(year=year))
+        if not blob:
             continue
+        data = json.loads(lzma.decompress(blob))
         for item in data.get("cve_items", []):
             if item["id"] in cves:
                 out[item["id"]] = parse_nvd(item)
@@ -218,14 +219,24 @@ async def load_nvd(session: aiohttp.ClientSession, cves: set[str]) -> dict[str, 
 # ---------------------------------------------------------------------------
 
 
+async def fetch(session, url: str, headers: dict | None = None, attempts: int = 3) -> bytes | None:
+    """GET with retries. A URL that never succeeds is recorded in FAILED and gives None."""
+    for attempt in range(attempts):
+        try:
+            async with session.get(url, headers=headers) as res:
+                res.raise_for_status()
+                return await res.read()
+        except Exception as e:  # noqa: BLE001 - retried, then reported
+            error = e
+            await asyncio.sleep(2**attempt)
+    print(f"Failed after {attempts} attempts: {url}: {error}")
+    FAILED.append(url)
+    return None
+
+
 async def get_soup(session, url):
-    try:
-        async with session.get(url) as response:
-            response.raise_for_status()
-            return BeautifulSoup(await response.text(), "html.parser")
-    except Exception as e:  # noqa: BLE001
-        print(f"Error fetching {url}: {e}")
-        return None
+    body = await fetch(session, url)
+    return BeautifulSoup(body, "html.parser") if body else None
 
 
 def _links(soup) -> list[tuple[str, str]]:
@@ -294,11 +305,10 @@ async def load_analyzed(session: aiohttp.ClientSession) -> set[str]:
     names: set[str] = set()
     for page in range(1, 100):
         url = f"https://api.github.com/users/{ANALYSIS_ORG}/repos?type=public&per_page=100&page={page}"
-        async with session.get(url, headers=headers) as res:
-            if res.status != 200:
-                print(f"GitHub {ANALYSIS_ORG} repos: HTTP {res.status}, marking nothing as analyzed")
-                return set()
-            batch = await res.json()
+        body = await fetch(session, url, headers)
+        if body is None:
+            return set()
+        batch = json.loads(body)
         names |= {r["name"].upper() for r in batch if ANALYSIS_REPO_RE.match(r["name"])}
         if len(batch) < 100:
             break
@@ -309,6 +319,11 @@ async def load_analyzed(session: aiohttp.ClientSession) -> set[str]:
 # ---------------------------------------------------------------------------
 # JSON output
 # ---------------------------------------------------------------------------
+
+
+def _slug(name: str) -> str:
+    """A file name for a year or component, e.g. "Model I/O" -> "model-i-o"."""
+    return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "unnamed"
 
 
 def _write_json(path: str, data) -> None:
@@ -369,13 +384,31 @@ def write_api(out: str, advisories: list[dict], nvd: dict[str, dict], analyzed: 
         )
 
     index.sort(key=lambda c: (c["released"] or "", c["id"]), reverse=True)
+
+    # Shards, so a browser only downloads the slice it is looking at: by the CVE id's year, and by component.
+    # Grouped by file name, so names that only differ in case or punctuation ("Wi-Fi", "Wi Fi") share a shard.
+    def shard(folder: str, key) -> list[dict]:
+        groups: dict[str, tuple[str, list[dict]]] = {}
+        for c in index:
+            for name in key(c):
+                groups.setdefault(_slug(name), (name, []))[1].append(c)
+        os.makedirs(os.path.join(out, folder))
+        listing = []
+        for slug, (name, cves) in groups.items():
+            _write_json(os.path.join(out, folder, f"{slug}.json"), cves)
+            listing.append({"name": name, "file": f"{folder}/{slug}.json", "count": len(cves)})
+        return listing
+
     _write_json(
         os.path.join(out, "index.json"),
         {
             "generated": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "org": ANALYSIS_ORG,
             "advisories": len(advisories),
-            "cves": index,
+            "cves": len(index),
+            "analyzed": sum(c["analyzed"] for c in index),
+            "years": sorted(shard("years", lambda c: [c["id"].split("-")[1]]), key=lambda s: s["name"], reverse=True),
+            "components": sorted(shard("components", lambda c: c["components"]), key=lambda s: -s["count"]),
         },
     )
     print(f"Wrote {out}: {len(advisories)} advisories, {len(index)} CVEs, {len(analyzed)} analyzed")
@@ -413,6 +446,8 @@ async def main(out: str, limit: int | None) -> None:
         nvd = await load_nvd(session, cves)
         analyzed = await load_analyzed(session)
 
+    if FAILED or not advisories:
+        sys.exit(f"{len(FAILED)} request(s) failed; wrote nothing, so the published data stays as it was.")
     write_api(out, advisories, nvd, analyzed)
 
 

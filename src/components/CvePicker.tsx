@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { CheckIcon, LockIcon, RepoIcon, SearchIcon } from "@primer/octicons-react";
+import { CheckIcon, LockIcon, RepoIcon, SearchIcon, SyncIcon } from "@primer/octicons-react";
+import { loadShard } from "../api";
+import { useAsync } from "../lib/util";
 import { KERNEL_COMPONENTS, type CveSummary, type Index } from "../types";
 import { BlankSlate } from "./BlankSlate";
 
@@ -14,9 +16,13 @@ interface Filters {
   severity: string;
   platform: string;
   component: string;
+  /** "" = the newest year, or every year when a component is chosen. */
+  year: string;
   status: "" | "analyzed" | "unanalyzed" | "mine";
 }
-const DEFAULTS: Filters = { q: "", scope: "kernel", severity: "", platform: "", component: "", status: "" };
+const DEFAULTS: Filters = { q: "", scope: "kernel", severity: "", platform: "", component: "", year: "", status: "" };
+
+const yearOf = (cveId: string) => cveId.split("-")[1];
 
 function monthLabel(iso: string | null) {
   if (!iso) return "Undated";
@@ -27,9 +33,10 @@ function monthLabel(iso: string | null) {
   });
 }
 
-function matches(c: CveSummary, f: Filters, mine: Set<string>) {
-  if (f.component ? !c.components.includes(f.component) : f.scope === "kernel" && !c.components.some((x) => KERNEL.has(x)))
-    return false;
+/** Filters within the loaded shard. Which shard to load (year or component) is decided in CvePicker. */
+function matches(c: CveSummary, f: Filters, year: string | null, mine: Set<string>) {
+  if (!f.component && f.scope === "kernel" && !c.components.some((x) => KERNEL.has(x))) return false;
+  if (year && yearOf(c.id) !== year) return false;
   if (f.severity && c.severity !== f.severity) return false;
   if (f.platform && !c.platforms.includes(f.platform)) return false;
   if (f.status === "analyzed" && !c.analyzed) return false;
@@ -60,13 +67,22 @@ export function CvePicker({ index, mine, current, onPick }: Props) {
   const [active, setActive] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
 
-  const components = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const c of index?.cves ?? []) for (const x of c.components) counts.set(x, (counts.get(x) ?? 0) + 1);
-    return [...counts].sort((a, b) => b[1] - a[1]);
-  }, [index]);
+  // Load one shard: the chosen component (all years), or one year — the one in a typed CVE id, else the
+  // chosen year, else the newest. Everything else filters within it.
+  const typedYear = /CVE-(\d{4})/i.exec(filters.q)?.[1] ?? null;
+  const year = typedYear ?? (filters.year || null);
+  const shownYear = year ?? index?.years[0]?.name ?? null;
+  const file = filters.component
+    ? index?.components.find((c) => c.name === filters.component)?.file
+    : index?.years.find((y) => y.name === shownYear)?.file;
+  const [shard, shardError] = useAsync(() => (file ? loadShard(file) : null), [file]);
 
-  const items = useMemo(() => (index?.cves ?? []).filter((c) => matches(c, filters, mine)), [index, filters, mine]);
+  const items = useMemo(
+    () => (shard ?? []).filter((c) => matches(c, filters, filters.component ? year : null, mine)),
+    [shard, filters, year, mine],
+  );
+  const loading = Boolean(file) && !shard && !shardError;
+  const where = filters.component ? `${filters.component}${year ? ` · ${year}` : ""}` : (shownYear ?? "");
 
   useEffect(() => {
     const { q: _q, ...persist } = filters;
@@ -142,6 +158,20 @@ export function CvePicker({ index, mine, current, onPick }: Props) {
           </select>
         </div>
         <div className="picker-filters">
+          <select
+            className="select"
+            value={typedYear ?? filters.year}
+            disabled={Boolean(typedYear)}
+            title={typedYear ? "Set by the CVE id you typed" : undefined}
+            onChange={(e) => set({ year: e.target.value })}
+          >
+            <option value="">{filters.component ? "All years" : `Newest (${index?.years[0]?.name ?? "…"})`}</option>
+            {index?.years.map((y) => (
+              <option key={y.name} value={y.name}>
+                {y.name} ({y.count})
+              </option>
+            ))}
+          </select>
           <select className="select" value={filters.platform} onChange={(e) => set({ platform: e.target.value })}>
             <option value="">All platforms</option>
             {PLATFORMS.map((p) => (
@@ -155,19 +185,26 @@ export function CvePicker({ index, mine, current, onPick }: Props) {
             onChange={(e) => set({ component: e.target.value })}
           >
             <option value="">{filters.scope === "kernel" ? "Kernel components" : "All components"}</option>
-            {components.map(([name, count]) => (
-              <option key={name} value={name}>
-                {name} ({count})
+            {index?.components.map((c) => (
+              <option key={c.name} value={c.name}>
+                {c.name} ({c.count})
               </option>
             ))}
           </select>
-          <span className="picker-count">{index ? `${items.length.toLocaleString()} CVEs` : "Loading…"}</span>
+          <span className="picker-count" title={`Showing ${where}`}>
+            {loading ? <SyncIcon size={12} className="spinner" /> : `${items.length.toLocaleString()} in ${where}`}
+          </span>
         </div>
       </div>
       <div className="picker-list" ref={listRef} onScroll={onScroll}>
-        {index && items.length === 0 && (
+        {(shardError || (shard && items.length === 0) || (index && !file)) && (
           <BlankSlate>
-            <p>No CVEs match these filters.</p>
+            <p>
+              {shardError ??
+                (file
+                  ? `No CVEs in ${where} match these filters.`
+                  : `No CVEs from ${shownYear} are tracked.`)}
+            </p>
           </BlankSlate>
         )}
         {items.slice(0, shown).map((item, i) => {

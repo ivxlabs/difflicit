@@ -715,7 +715,15 @@ code,
   color: var(--hunk-fg);
 }
 .diff-table tr.hunk .code {
-  padding: 2px 10px;
+  padding: 0 10px;
+}
+/* DiffView windows its rows by assuming every row is exactly 20px tall. */
+.diff-table tr {
+  height: 20px;
+}
+.diff-table tr.spacer td {
+  padding: 0;
+  background: none;
 }
 .diff-table tr.hunk .code::before {
   content: none;

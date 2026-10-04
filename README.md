@@ -16,9 +16,13 @@ GitHub Actions (weekly)                        Browser (this Vite app, on GitHub
   GitHub repos named CVE-YYYY-NNNN ─────────────►│  write-ups + diffs    (api.github.com, directly)
 ```
 
-- **CVE data**: the scrape workflow writes a static JSON API and syncs it to an S3-compatible bucket behind a CDN:
-  - `index.json` lists every CVE with its severity, components, impact, platforms, and whether it has an analysis.
-  - `cves/CVE-YYYY-NNNN.json` holds the NVD data and every Apple advisory entry for one CVE.
+- **CVE data**: the scrape workflow writes a static JSON API and syncs it to an S3-compatible bucket behind a CDN.
+  It is sharded so a browser only downloads the slice it is looking at:
+  - `index.json`: totals and the list of shards (a few KB).
+  - `years/2026.json`: summaries of the CVEs whose id is `CVE-2026-*` (severity, components, impact, platforms,
+    analyzed). Typing a CVE id loads its year.
+  - `components/kernel.json`: the same, for every CVE Apple lists under one component, all years.
+  - `cves/CVE-YYYY-NNNN.json`: the NVD data and every Apple advisory entry for one CVE.
 - **Analyses** are GitHub repositories named `CVE-YYYY-NNNN`. The app renders `README.md` as the write-up and every
   `*.diff` / `*.patch` file in the diff viewer. It looks in:
   - `<org>/CVE-…`, the published analysis (org = owner of the repo this site is built from, e.g. `ivxlabs`)

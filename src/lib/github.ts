@@ -1,6 +1,7 @@
 import { GITHUB_API } from "../config";
 import type { Repo, RepoContent, Viewer } from "../types";
 import { access } from "./access";
+import { parseUnifiedDiff } from "./diff";
 import { cached, uniqueBy } from "./util";
 
 /** A GitHub REST call: as the user when they're connected (directly or through iam), anonymously otherwise. */
@@ -92,9 +93,10 @@ export async function repoContent(repo: Repo, maxPatches = 30): Promise<RepoCont
       const res = repo.private
         ? await gh(`/repos/${repo.full_name}/contents/${encoded}?ref=${branch}`, { accept: "application/vnd.github.raw" })
         : await fetch(`https://raw.githubusercontent.com/${repo.full_name}/${branch}/${encoded}`);
-      return { path, content: res.ok ? await res.text() : "" };
+      // Parsed right away so only the per-file text is kept, not a second copy of each patch.
+      return res.ok ? parseUnifiedDiff(await res.text()) : [];
     }),
   );
 
-  return { readme_html: readme.ok ? await readme.text() : null, patches };
+  return { readme_html: readme.ok ? await readme.text() : null, files: patches.flat() };
 }

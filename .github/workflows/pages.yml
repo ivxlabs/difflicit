@@ -29,10 +29,11 @@ jobs:
         env:
           VITE_PROJECT_REPO: ${{ github.repository }}
           VITE_API_BASE: ${{ vars.API_BASE }} # empty = https://cdn.ivx.run/applesec/api
-          # "Sign In" is only built when all three are set (see vite.config.ts).
-          VITE_SUPABASE_URL: ${{ vars.SUPABASE_URL }}
-          VITE_SUPABASE_CLIENT_ID: ${{ vars.SUPABASE_CLIENT_ID }}
-          VITE_IAM_URL: ${{ vars.IAM_URL }}
+          # "Sign In" is only built when all three are set (see vite.config.ts); the build log says which are missing.
+          # They end up in the public page either way, so they can be saved as variables or as secrets.
+          VITE_SUPABASE_URL: ${{ vars.SUPABASE_URL || secrets.SUPABASE_URL }}
+          VITE_SUPABASE_CLIENT_ID: ${{ vars.SUPABASE_CLIENT_ID || secrets.SUPABASE_CLIENT_ID }}
+          VITE_IAM_URL: ${{ vars.IAM_URL || secrets.IAM_URL }}
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

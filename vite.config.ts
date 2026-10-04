@@ -41,6 +41,8 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "VITE_");
   for (const [key, value] of Object.entries(DEFAULTS)) process.env[key] = env[key] || value;
   const iam = IAM_VARS.every((key) => env[key]);
+  const missing = IAM_VARS.filter((key) => !env[key]).map((key) => key.replace("VITE_", ""));
+  console.log(iam ? "Sign In: on" : `Sign In: off (missing ${missing.join(", ")}; repository variables in CI, VITE_* locally)`);
 
   return {
     base: "./", // works on a custom domain and under /<repo>/ on github.io

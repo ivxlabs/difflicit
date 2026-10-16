@@ -1,6 +1,10 @@
 {
   "name": "ivx/xnu",
   "icon": "💀",
-  "apiBase": "https://cdn.ivx.run/applesec/api",
-  "projectRepo": "ivxlabs/difflicit"
+  "projectRepo": "ivxlabs/difflicit",
+  "projects": {
+    "owner": "ivxlabs",
+    "id": "CVE-\\d{4}-\\d{4,}",
+    "repo": "{id}"
+  }
 }

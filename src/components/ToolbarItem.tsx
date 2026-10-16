@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { TriangleDownIcon } from "@primer/octicons-react";
+import { useCommand } from "../lib/commands";
 import { useOutside } from "./useOutside";
 
 interface ButtonProps {
@@ -43,28 +44,18 @@ export function ToolbarButton({ icon, top, main, href, onClick, disabled, width,
 
 interface DropdownProps extends Omit<ButtonProps, "href" | "onClick" | "caret" | "className"> {
   defaultOpen?: boolean;
-  /** ⌘/Ctrl + this key toggles the dropdown. */
-  shortcut?: string;
+  /** The command (lib/commands.ts) that toggles the dropdown, e.g. from ⌘O or the command palette. */
+  command?: string;
   children: (close: () => void) => React.ReactNode;
 }
 
-export function ToolbarDropdown({ defaultOpen = false, shortcut, children, ...button }: DropdownProps) {
+export function ToolbarDropdown({ defaultOpen = false, command, children, ...button }: DropdownProps) {
   const [open, setOpen] = useState(defaultOpen);
   const ref = useRef<HTMLDivElement>(null);
   const close = useCallback(() => setOpen(false), []);
   useOutside(ref, open, close);
 
-  useEffect(() => {
-    if (!shortcut) return;
-    const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === shortcut) {
-        e.preventDefault();
-        setOpen((o) => !o);
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [shortcut]);
+  useCommand(command ?? "", () => setOpen((o) => !o), Boolean(command) && !button.disabled);
 
   return (
     <div className="toolbar-dropdown-wrap" ref={ref} style={button.width ? { flex: `0 1 ${button.width}px` } : undefined}>

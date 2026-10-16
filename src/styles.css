@@ -142,12 +142,20 @@ code,
 
 .toolbar-brand {
   display: flex;
-  flex-direction: column;
-  justify-content: center;
+  align-items: center;
+  gap: 9px;
   padding: 0 14px;
   border-right: 1px solid var(--toolbar-border);
   color: var(--toolbar-text);
   white-space: nowrap;
+}
+.brand-logo {
+  flex: none;
+  display: block;
+}
+.brand-text {
+  display: flex;
+  flex-direction: column;
 }
 .toolbar-brand .product {
   font-family: "Archivo Black", var(--font);
@@ -157,6 +165,56 @@ code,
 .toolbar-brand .instance {
   font-size: 11px;
   color: var(--toolbar-muted);
+}
+
+/* macOS desktop: the toolbar is the title bar. 52px is a unified toolbar, and the traffic lights are
+   centred in it by trafficLightPosition in tauri.conf.json, so the two change together. */
+.mac-window .toolbar {
+  height: 52px;
+  padding-left: 74px;
+}
+/* Drag regions only answer for the element itself, so let the wordmark's clicks fall through to it. */
+.mac-window .toolbar-brand > * {
+  pointer-events: none;
+}
+.mac-window .toolbar-brand .ivx-mark {
+  pointer-events: auto;
+}
+
+/* "ivx/res", unfurling to "ivx research" on hover. Monospace, so the slash and the space take the same room. */
+.ivx-mark,
+.ivx-mark:hover {
+  color: inherit;
+  text-decoration: none;
+}
+/* Room for "ivx research" up front, so unfurling doesn't shove the toolbar along. */
+.ivx-mark {
+  display: inline-block;
+  min-width: 12ch;
+}
+.ivx-mark__slash::before {
+  content: "/";
+}
+.ivx-mark:hover .ivx-mark__slash::before {
+  content: "\00a0";
+}
+.ivx-mark__rest {
+  display: inline-block;
+  max-width: 0;
+  overflow: hidden;
+  vertical-align: bottom;
+  transition: max-width 0.25s ease;
+}
+.ivx-mark:hover {
+  color: var(--toolbar-text);
+}
+.ivx-mark:hover .ivx-mark__rest {
+  max-width: 5ch;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ivx-mark__rest {
+    transition: none;
+  }
 }
 
 .toolbar-button {
@@ -235,9 +293,9 @@ code,
   box-shadow: var(--shadow);
 }
 
-/* --------------------------------------------------------------- CVE picker */
+/* --------------------------------------------------------------- project picker */
 
-.cve-picker {
+.project-picker {
   width: 420px;
   height: calc(100vh - 70px);
 }
@@ -385,7 +443,7 @@ code,
   flex: none;
 }
 
-/* A list row: CVE in the picker, finding in history, file in a file list. */
+/* A list row: project in the picker, finding in history, file in a file list. */
 .list-item {
   display: flex;
   align-items: center;
@@ -479,16 +537,16 @@ code,
   flex: none;
   background: var(--rejected);
 }
-.sev.Critical {
+.sev.critical {
   background: var(--sev-critical);
 }
-.sev.High {
+.sev.high {
   background: var(--sev-high);
 }
-.sev.Medium {
+.sev.medium {
   background: var(--sev-medium);
 }
-.sev.Low {
+.sev.low {
   background: var(--sev-low);
 }
 
@@ -504,19 +562,19 @@ code,
   background: var(--bg-alt);
   white-space: nowrap;
 }
-.pill.Critical {
+.pill.critical {
   border-color: var(--sev-critical);
   color: var(--sev-critical);
 }
-.pill.High {
+.pill.high {
   border-color: var(--sev-high);
   color: var(--sev-high);
 }
-.pill.Medium {
+.pill.medium {
   border-color: var(--sev-medium);
   color: var(--sev-medium);
 }
-.pill.Low {
+.pill.low {
   border-color: var(--sev-low);
   color: var(--sev-low);
 }
@@ -540,12 +598,12 @@ code,
   background: var(--bg);
 }
 
-.cve-header {
+.project-header {
   flex: none;
   border-bottom: 1px solid var(--border);
   background: var(--bg-alt);
 }
-.cve-header-bar {
+.project-header-bar {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -553,14 +611,14 @@ code,
   cursor: pointer;
   user-select: none;
 }
-.cve-header-bar h1 {
+.project-header-bar h1 {
   margin: 0;
   font-size: 14px;
   font-weight: 600;
   color: var(--text-strong);
   font-family: var(--mono);
 }
-.cve-header-bar .impact {
+.project-header-bar .summary {
   flex: 1;
   min-width: 0;
   white-space: nowrap;
@@ -568,7 +626,7 @@ code,
   text-overflow: ellipsis;
   color: var(--text-secondary);
 }
-.cve-details {
+.project-details {
   padding: 4px 12px 12px 34px;
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
@@ -576,24 +634,27 @@ code,
   max-height: 40vh;
   overflow-y: auto;
 }
-.cve-details h3 {
+.project-details h3 {
   margin: 0 0 6px;
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--text-secondary);
 }
-.cve-details p {
+.project-details p {
   margin: 0 0 6px;
   line-height: 1.5;
 }
-.cve-details ul {
+.project-details ul {
   margin: 0;
   padding-left: 16px;
   line-height: 1.6;
 }
-.cve-details .wide {
+.project-details .wide {
   grid-column: 1 / -1;
+}
+.project-details .tags .pill {
+  margin-right: 4px;
 }
 .entry {
   padding: 6px 0;
@@ -868,6 +929,16 @@ a.toolbar-button:hover {
 .sidebar-header.repo-link {
   color: var(--text);
 }
+/* A local folder's header is a button (show in folder) that looks like the repository link. */
+button.sidebar-header.repo-link {
+  width: 100%;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  background: none;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
 .sidebar-header.repo-link:hover {
   background: var(--bg-alt);
   text-decoration: none;
@@ -1100,7 +1171,120 @@ a.toolbar-button:hover {
   .app.embed .sidebar {
     display: none;
   }
-  .app.embed .cve-header-bar .impact {
+  .app.embed .project-header-bar .summary {
     display: none;
   }
+}
+
+/* ----------------------------------------------------------------- quick pick (⌘K search, ⌘P commands) */
+
+.modal.quick-pick {
+  width: min(640px, 92vw);
+  display: flex;
+  flex-direction: column;
+  max-height: 70vh;
+}
+.quick-pick .search {
+  padding: 10px;
+  border-bottom: 1px solid var(--border);
+}
+.quick-pick-list {
+  overflow-y: auto;
+  padding: 4px 0;
+}
+.quick-pick-list .list-item {
+  cursor: pointer;
+}
+.quick-pick-empty {
+  padding: 16px;
+  text-align: center;
+}
+.quick-pick mark {
+  background: rgba(210, 153, 34, 0.35);
+  color: inherit;
+  border-radius: 2px;
+}
+.search-mark {
+  width: 14px;
+  text-align: center;
+  font-family: var(--mono);
+}
+.search-mark.add {
+  color: var(--add-fg);
+}
+.search-mark.del {
+  color: var(--del-fg);
+}
+
+/* The line a search result or link jumped to. */
+.diff-table tr.target td {
+  box-shadow: inset 0 1px 0 var(--accent), inset 0 -1px 0 var(--accent);
+}
+
+/* ----------------------------------------------------------------- new-analysis form */
+
+.modal .field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 12px;
+}
+.modal .field > span {
+  color: var(--text-secondary);
+}
+.modal .row {
+  display: flex;
+  gap: 8px;
+}
+.modal .row.two {
+  gap: 12px;
+}
+.modal .row.two .field {
+  flex: 1;
+  min-width: 0;
+}
+.modal .row .input {
+  flex: 1;
+  min-width: 0;
+}
+.modal .btn.file-btn {
+  justify-content: flex-start;
+  overflow: hidden;
+}
+.modal .btn.file-btn code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* a binary function that didn't change: still listed, but quietened */
+.list-item.file.dim {
+  opacity: 0.55;
+}
+
+/* ----------------------------------------------------------------- artifacts picker */
+
+.artifacts-menu {
+  min-width: 320px;
+}
+.artifacts-pair {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 10px;
+  border-bottom: 1px solid var(--border);
+}
+.artifacts-pair label {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.artifacts-pair .select {
+  width: 100%;
+}
+.artifacts-menu > .btn {
+  margin: 8px 10px;
 }

@@ -23,7 +23,6 @@ jobs:
         working-directory: scripts
         run: uv run main.py --out out/api
         env:
-          ANALYSIS_ORG: ${{ github.repository_owner }}
           GITHUB_TOKEN: ${{ github.token }}
 
       # Any S3-compatible bucket works; for Cloudflare R2 the endpoint is https://<account-id>.r2.cloudflarestorage.com

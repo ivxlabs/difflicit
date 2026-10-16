@@ -1,1 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="7" fill="#0d1117"/><path d="M9 11h6M12 8v6" stroke="#3fb950" stroke-width="2.4" stroke-linecap="round"/><path d="M17 21h6" stroke="#f85149" stroke-width="2.4" stroke-linecap="round"/></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- Difflicit: a skull split like a side-by-side diff, added on the left (+), removed on the right (−). -->
+  <rect width="32" height="32" rx="7" fill="#0d1117"/>
+  <clipPath id="added"><rect width="16" height="32"/></clipPath>
+  <clipPath id="removed"><rect x="16" width="16" height="32"/></clipPath>
+  <path d="M16 4.5C9.6 4.5 5 9.2 5 15c0 3.5 1.7 6.2 4.2 7.6V26a1.8 1.8 0 0 0 1.8 1.8h10a1.8 1.8 0 0 0 1.8-1.8v-3.4C25.3 21.2 27 18.5 27 15c0-5.8-4.6-10.5-11-10.5z" fill="#3fb950" clip-path="url(#added)"/>
+  <path d="M16 4.5C9.6 4.5 5 9.2 5 15c0 3.5 1.7 6.2 4.2 7.6V26a1.8 1.8 0 0 0 1.8 1.8h10a1.8 1.8 0 0 0 1.8-1.8v-3.4C25.3 21.2 27 18.5 27 15c0-5.8-4.6-10.5-11-10.5z" fill="#f85149" clip-path="url(#removed)"/>
+  <g fill="#0d1117">
+    <rect x="15.4" y="4" width="1.2" height="24"/>
+    <path d="M10.4 12.4h2.2v2.2h2.2v2.2h-2.2v2.2h-2.2v-2.2H8.2v-2.2h2.2z"/>
+    <rect x="17.2" y="14.6" width="6.6" height="2.2" rx=".4"/>
+    <path d="M14.9 19.4v2.9h-1.9zM17.1 19.4v2.9h1.9z"/>
+    <rect x="12.6" y="23.8" width="1.1" height="4.2"/>
+    <rect x="18.3" y="23.8" width="1.1" height="4.2"/>
+  </g>
+</svg>

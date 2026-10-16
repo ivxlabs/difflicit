@@ -3,21 +3,20 @@ import { useState } from "react";
 import { CheckIcon, CodeIcon, CopyIcon, LinkExternalIcon, LockIcon, ShareIcon } from "@primer/octicons-react";
 import { INSTANCE } from "../config";
 import { urlFor } from "../lib/route";
-import type { CveDetail, Repo } from "../types";
+import type { Project, Repo } from "../types";
 import { ToolbarDropdown } from "./ToolbarItem";
 
 interface Props {
-  cve: CveDetail;
+  project: Project;
   repo: Repo | null;
   file: string | null;
 }
 
-/** Share what's on screen: the URL already encodes the CVE, repository and open file. */
-export function ShareMenu({ cve, repo, file }: Props) {
+/** Share what's on screen: the URL already encodes the project, repository and open file. */
+export function ShareMenu({ project, repo, file }: Props) {
   const [copied, setCopied] = useState<"link" | "embed" | null>(null);
-  const impact = cve.entries.find((e) => e.impact)?.impact;
-  const subject = file ? `${cve.id}: ${file}` : cve.id;
-  const text = `${subject}${impact ? `: ${impact}` : ""}`.slice(0, 200) + ` · patch analysis on ${INSTANCE.name}`;
+  const subject = file ? `${project.id}: ${file}` : project.id;
+  const text = `${subject}${project.summary ? `: ${project.summary}` : ""}`.slice(0, 200) + ` · patch analysis on ${INSTANCE.name}`;
 
   const link = urlFor({ embed: false });
   const embedCode = `<iframe src="${urlFor({ embed: true })}" title="${`${subject} · ${INSTANCE.name}`.replace(/"/g, "&quot;")}" width="100%" height="560" style="height: 560px !important; max-width: 100%; border: 0; border-radius: 8px" loading="lazy"></iframe>`;

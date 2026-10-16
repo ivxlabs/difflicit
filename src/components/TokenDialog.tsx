@@ -3,10 +3,12 @@ import { useState } from "react";
 import { XIcon } from "@primer/octicons-react";
 import { INSTANCE, PRODUCT } from "../config";
 import { pat } from "../lib/access";
+import { IS_DESKTOP } from "../lib/desktop";
 import { viewer } from "../lib/github";
+import { DocsLink } from "./BlankSlate";
 import type { Viewer } from "../types";
 
-const NEW_TOKEN_URL = `https://github.com/settings/tokens/new?scopes=repo&description=${encodeURIComponent(`${PRODUCT} (${INSTANCE.name})`)}`;
+const NEW_TOKEN_URL = `https://github.com/settings/tokens/new?scopes=repo&description=${encodeURIComponent(IS_DESKTOP ? PRODUCT : `${PRODUCT} (${INSTANCE.name})`)}`;
 
 export function TokenDialog({ current, onClose }: { current: Viewer | null; onClose: () => void }) {
   const [value, setValue] = useState("");
@@ -45,14 +47,9 @@ export function TokenDialog({ current, onClose }: { current: Viewer | null; onCl
           </button>
         </header>
         <div className="content">
-          <p>
-            Paste a GitHub personal access token to see your own <code>CVE-YYYY-NNNN</code> repositories (private ones
-            included), fork analyses, and lift GitHub's anonymous limit of 60 requests an hour.
-          </p>
           <p className="muted">
-            A <a href={NEW_TOKEN_URL} target="_blank" rel="noreferrer">classic token with the <code>repo</code> scope</a>{" "}
-            covers everything; <code>public_repo</code> is enough if you only need public repos. The token stays in
-            this browser's local storage and is only ever sent to <code>api.github.com</code>.
+            A <a href={NEW_TOKEN_URL} target="_blank" rel="noreferrer">GitHub token</a>, kept in this browser and sent
+            only to <code>api.github.com</code>. <DocsLink page="github" />
           </p>
           <input
             className="input"

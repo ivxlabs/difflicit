@@ -1,0 +1,127 @@
+name: desktop
+
+# A version tag (`npm run release`, see scripts/release.mjs) drafts a GitHub Release with notes from the commits
+# since the previous version, then builds the desktop app for macOS, Windows and Linux and attaches the
+# installers. Review the draft and publish it. Run it by hand to rebuild an existing tag.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Version tag to (re)build, e.g. v1.2.0
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  TAG: ${{ inputs.tag || github.ref_name }}
+
+jobs:
+  draft:
+    runs-on: ubuntu-latest
+    outputs:
+      release_id: ${{ steps.release.outputs.id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+          fetch-depth: 0 # the previous tag and the commits since
+
+      - name: Check the tag matches package.json
+        run: |
+          version=$(node -p 'require("./package.json").version')
+          if [ "v$version" != "$TAG" ]; then
+            echo "::error::$TAG doesn't match package.json ($version). Release with \`npm run release\`."
+            exit 1
+          fi
+
+      - name: Release notes
+        run: |
+          previous=$(git describe --tags --abbrev=0 --match 'v*' "$TAG^" 2>/dev/null || true)
+          {
+            echo "## What's changed"
+            echo
+            git log --no-merges --pretty='- %s (%h)' "${previous:+$previous..}$TAG" \
+              | grep -v -E '^- Release v[0-9]' || echo "- First release"
+            echo
+            if [ -n "$previous" ]; then
+              echo "**Full changelog:** https://github.com/$GITHUB_REPOSITORY/compare/$previous...$TAG"
+              echo
+            fi
+            cat <<'EOF'
+          ## Download
+
+          | Platform | File |
+          | --- | --- |
+          | macOS (Apple Silicon and Intel) | `.dmg` |
+          | Windows | `-setup.exe` (or `.msi`) |
+          | Linux | `.AppImage`, `.deb` or `.rpm` |
+
+          The builds aren't code-signed yet. On **macOS**, right-click the app and choose *Open* the first time;
+          on **Windows**, choose *More info → Run anyway* in the SmartScreen prompt.
+          EOF
+          } > notes.md
+          cat notes.md
+
+      - name: Draft the release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Reuse the draft when re-running, so the builds attach to the same release.
+          id=$(gh api "repos/$GITHUB_REPOSITORY/releases" --paginate --jq ".[] | select(.tag_name == \"$TAG\") | .id" | head -n1)
+          if [ -z "$id" ]; then
+            flags=()
+            [[ "$TAG" == *-* ]] && flags+=(--prerelease) # v1.2.0-beta.1
+            gh release create "$TAG" --draft --verify-tag --title "Difflicit $TAG" --notes-file notes.md "${flags[@]}"
+            id=$(gh api "repos/$GITHUB_REPOSITORY/releases" --jq ".[] | select(.tag_name == \"$TAG\") | .id" | head -n1)
+          fi
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: draft
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            args: --target universal-apple-darwin # one app for Apple Silicon and Intel
+          - os: windows-latest
+            args: ""
+          - os: ubuntu-22.04
+            args: ""
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - name: Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ runner.os == 'macOS' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+
+      - run: npm ci
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VITE_PROJECT_REPO: ${{ github.repository }}
+        with:
+          releaseId: ${{ needs.draft.outputs.release_id }}
+          includeUpdaterJson: false # no auto-updater (yet)
+          args: ${{ matrix.args }}

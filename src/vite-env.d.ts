@@ -2,8 +2,8 @@
 /// <reference types="vite/client" />
 
 interface ImportMetaEnv {
-  /** Base URL of the static JSON API, e.g. https://cdn.ivx.run/applesec/api */
-  readonly VITE_API_BASE: string;
+  /** Base URL of the project catalog, e.g. https://cdn.ivx.run/applesec/api; empty for the user's own projects. */
+  readonly VITE_CATALOG: string;
   /** owner/name of this project's repository (Star button). */
   readonly VITE_PROJECT_REPO: string;
   // Sign In (iam.ivx.run). Only set in builds where __IAM__ is true.

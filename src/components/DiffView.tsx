@@ -2,6 +2,7 @@
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ColumnsIcon, RowsIcon } from "@primer/octicons-react";
 import { diffLines, toSplitRows, type DiffFile, type DiffLine, type SplitRow } from "../lib/diff";
+import { useCommand } from "../lib/commands";
 import { BlankSlate } from "./BlankSlate";
 
 type Mode = "unified" | "split";
@@ -17,12 +18,14 @@ export function DiffStat({ additions, deletions }: { additions: number; deletion
   );
 }
 
-export function DiffView({ file }: { file: DiffFile }) {
+export function DiffView({ file, line }: { file: DiffFile; line: number | null }) {
   const [mode, setModeState] = useState<Mode>(() => (localStorage.getItem(MODE_KEY) as Mode) ?? "unified");
   const setMode = (m: Mode) => {
     localStorage.setItem(MODE_KEY, m);
     setModeState(m);
   };
+  useCommand("diff-unified", () => setMode("unified"), mode !== "unified");
+  useCommand("diff-split", () => setMode("split"), mode !== "split");
 
   return (
     <div className="diff">
@@ -41,7 +44,7 @@ export function DiffView({ file }: { file: DiffFile }) {
         </div>
       </div>
       {/* Keyed so switching file or layout starts at the top. */}
-      <DiffBody key={`${file.path}\n${mode}`} file={file} mode={mode} />
+      <DiffBody key={`${file.path}\n${mode}`} file={file} mode={mode} line={line} />
     </div>
   );
 }
@@ -50,9 +53,16 @@ export function DiffView({ file }: { file: DiffFile }) {
  * The diff's lines are only parsed for the file on screen, and only the rows in view (plus OVERSCAN) are
  * in the DOM, so a 50,000-line file costs about as much memory as a 50-line one.
  */
-function DiffBody({ file, mode }: { file: DiffFile; mode: Mode }) {
+function DiffBody({ file, mode, line }: { file: DiffFile; mode: Mode; line: number | null }) {
   const lines = useMemo(() => diffLines(file), [file]);
   const rows = useMemo(() => (mode === "split" ? toSplitRows(lines) : lines), [lines, mode]);
+  // The row showing `line`: the same index in unified view; in split view, the pair (or hunk) it's in.
+  const target = useMemo(() => {
+    const l = line === null ? undefined : lines[line];
+    if (!l) return -1;
+    if (mode === "unified") return line!;
+    return (rows as SplitRow[]).findIndex((r) => r.left === l || r.right === l || (r.type === "hunk" && r.hunk === l.text));
+  }, [line, lines, rows, mode]);
   // Unified rows can be wider than the screen; reserve the widest line's width so it doesn't jump while scrolling.
   const widest = useMemo(() => lines.reduce((w, l) => Math.max(w, l.text.length), 0), [lines]);
 
@@ -62,6 +72,11 @@ function DiffBody({ file, mode }: { file: DiffFile; mode: Mode }) {
     const el = scroller.current;
     if (el) setView({ top: el.scrollTop, height: el.clientHeight });
   };
+  // Jump to the target row, a third of the way down, so what leads up to it shows too.
+  useLayoutEffect(() => {
+    const el = scroller.current;
+    if (el && target >= 0) el.scrollTop = Math.max(0, target * ROW - el.clientHeight / 3);
+  }, [target]);
   useLayoutEffect(() => {
     if (!scroller.current) return;
     measure();
@@ -105,9 +120,9 @@ function DiffBody({ file, mode }: { file: DiffFile; mode: Mode }) {
           {spacer(first * ROW)}
           {rows.slice(first, last).map((row, i) =>
             mode === "split" ? (
-              <SplitTableRow key={first + i} row={row as SplitRow} />
+              <SplitTableRow key={first + i} row={row as SplitRow} target={first + i === target} />
             ) : (
-              <UnifiedRow key={first + i} line={row as DiffLine} />
+              <UnifiedRow key={first + i} line={row as DiffLine} target={first + i === target} />
             ),
           )}
           {spacer((rows.length - last) * ROW)}
@@ -117,9 +132,9 @@ function DiffBody({ file, mode }: { file: DiffFile; mode: Mode }) {
   );
 }
 
-function UnifiedRow({ line }: { line: DiffLine }) {
+function UnifiedRow({ line, target }: { line: DiffLine; target: boolean }) {
   return (
-    <tr className={line.type}>
+    <tr className={`${line.type} ${target ? "target" : ""}`}>
       <td className="ln">{line.oldNo}</td>
       <td className="ln">{line.newNo}</td>
       <td className="code">{line.text}</td>
@@ -127,10 +142,10 @@ function UnifiedRow({ line }: { line: DiffLine }) {
   );
 }
 
-function SplitTableRow({ row }: { row: SplitRow }) {
+function SplitTableRow({ row, target }: { row: SplitRow; target: boolean }) {
   if (row.type === "hunk") {
     return (
-      <tr className="hunk">
+      <tr className={`hunk ${target ? "target" : ""}`}>
         <td className="ln" />
         <td className="code" colSpan={3}>
           {row.hunk}
@@ -150,7 +165,7 @@ function SplitTableRow({ row }: { row: SplitRow }) {
       <td className={`empty ${gap}`} colSpan={2} />
     );
   return (
-    <tr>
+    <tr className={target ? "target" : undefined}>
       {side(row.left, row.left?.oldNo, "")}
       {side(row.right, row.right?.newNo, "split-gap")}
     </tr>

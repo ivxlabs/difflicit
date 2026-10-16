@@ -1,64 +1,116 @@
 // SPDX-License-Identifier: GPL-3.0-only
 import type { DiffFile } from "./lib/diff";
 
-// Shapes of the static JSON API written by scripts/main.py.
+// The static JSON API: a catalog of projects to analyze, written by an instance's scraper (scripts/main.py for
+// ivx/xnu, where the projects are CVEs). Nothing in the app knows what a project is beyond what's here.
 
-export type Severity = "Critical" | "High" | "Medium" | "Low";
+/** How a badge is coloured. */
+export type Tone = "critical" | "high" | "medium" | "low";
 
-export interface CveSummary {
+/** A short label shown next to a project's id, e.g. a CVE's severity. */
+export interface Badge {
+  label: string;
+  tone: Tone | null;
+}
+
+export interface ProjectSummary {
   id: string;
-  severity: Severity | null;
-  cvss_score: number | null;
-  components: string[];
-  impact: string | null;
-  released: string | null;
-  platforms: string[];
-  /** A public <org>/CVE-YYYY-NNNN repo existed at the last scrape. */
+  /** One line, e.g. a CVE's impact. */
+  summary: string | null;
+  /** ISO date; the list is grouped by month. */
+  date: string | null;
+  badge: Badge | null;
+  /** Shown after the id, e.g. a CVE's components. The first is also shown in the project header. */
+  tags: string[];
+  /** Values to filter by, keyed by Facet.key. */
+  facets: Record<string, string | string[]>;
+  /** The owner's published analysis existed at the last scrape. */
   analyzed: boolean;
 }
 
-/** A slice of the CVE list in its own file: one year (by CVE id) or one component. */
+/** A slice of the catalog in its own file, e.g. one year or one component. */
 export interface Shard {
   name: string;
   file: string;
   count: number;
 }
 
-/** index.json: totals and the shards, so the browser only downloads the slice it is looking at. */
+/** Something to filter projects by, e.g. severity, year or component. */
+export interface Facet {
+  key: string;
+  /** The "no filter" option, e.g. "Any severity". */
+  any: string;
+  /** The values to offer, when the facet has no shards. */
+  values?: string[];
+  /**
+   * The catalog split by this facet's values, so the browser only downloads one slice. The first faceted with
+   * shards picks the default slice (its first shard); a narrower chosen shard of another facet wins.
+   */
+  shards?: Shard[];
+  /** A regular expression whose first group, when a search matches it, picks a shard, e.g. a typed id's year. */
+  match?: string;
+}
+
+/** A named subset offered as a quick scope, e.g. "Kernel & friends". The first is the default; "All" is always there. */
+export interface Scope {
+  label: string;
+  facet: string;
+  values: string[];
+}
+
+/** index.json: totals and how the catalog is sliced, so the browser only downloads what it's looking at. */
 export interface Index {
   generated: string;
-  org: string;
-  advisories: number;
-  cves: number;
-  analyzed: number;
-  /** Newest first. */
-  years: Shard[];
-  /** Largest first. */
-  components: Shard[];
-}
-
-export interface CveEntry {
-  advisory_id: string;
-  component: string;
-  impact: string | null;
-  description: string | null;
-  credit: string | null;
+  /** The welcome page's title and first sentence, e.g. "Find the patch behind every Apple CVE". */
   title: string;
-  url: string;
-  released: string | null;
-  platforms: string[];
+  about: string;
+  /** Headline numbers for the welcome page, e.g. 4,068 CVEs. */
+  stats: { label: string; value: number }[];
+  facets: Facet[];
+  scopes: Scope[];
+  /** Every project, for catalogs small enough not to need shards (e.g. the user's own). */
+  projects?: ProjectSummary[];
 }
 
-export interface CveDetail {
+export interface Link {
+  label: string;
+  url?: string;
+  /** Shown after the link, muted. */
+  note?: string;
+}
+
+/** A piece of a project's details. */
+export type Block =
+  | { type: "text"; text: string; muted?: boolean }
+  /** A titled item, e.g. one advisory's write-up. */
+  | { type: "entry"; title: string; detail?: string | null; notes?: string[] }
+  | { type: "code"; label: string; code: string }
+  | { type: "tags"; items: Link[] }
+  | { type: "links"; items: Link[] };
+
+export interface Section {
+  title: string;
+  /** Spans the whole width instead of one column. */
+  wide?: boolean;
+  blocks: Block[];
+}
+
+/** projects/<id>.json: everything known about one project. */
+export interface Project {
   id: string;
-  severity: Severity | null;
-  cvss_score: number | null;
-  cvss_version: string | null;
-  cvss_vector: string | null;
-  nvd_description: string | null;
-  cwes: string[];
-  refs: { url: string; tags: string[] }[];
-  entries: CveEntry[];
+  summary: string | null;
+  badge: Badge | null;
+  tags: string[];
+  /** The project header's details. */
+  sections: Section[];
+  /** A toolbar menu of related pages, e.g. the advisories a CVE was fixed in. */
+  menu: { label: string; items: { title: string; detail: string | null; url: string }[] } | null;
+}
+
+/** analysis.json at the root of a repository or folder: what makes it an analysis, and of which project. */
+export interface AnalysisFile {
+  $schema?: string;
+  project: string;
 }
 
 /** The subset of a GitHub repository object the app uses. */
@@ -73,6 +125,28 @@ export interface Repo {
   forks_count: number;
   pushed_at: string | null;
   html_url: string;
+  /** What the signed-in user may do with it (only present on authenticated requests). */
+  permissions?: { push: boolean };
+}
+
+/** Where an analysis lives: a GitHub repository, or (in the desktop app) a folder on this computer. */
+export type Location = { kind: "github"; repo: Repo } | { kind: "local"; path: string; folder: string };
+
+/**
+ * A thing a project compares, added with just a path or git URL. A git repo's versions are its commits/tags; a
+ * file/folder's versions are the copies you add.
+ */
+export type Artifact =
+  | { name: string; kind: "git"; repo: string }
+  | { name: string; kind: "file"; versions: { id: string; path: string }[] };
+
+/** One function in a binary diff (radiff2): its name, how it changed, and a 0–1 similarity. */
+export interface BinaryFunction {
+  name: string;
+  status: "same" | "changed" | "added" | "removed";
+  similarity: number;
+  base_addr: string | null;
+  head_addr: string | null;
 }
 
 export interface RepoContent {
@@ -81,31 +155,22 @@ export interface RepoContent {
   files: DiffFile[];
 }
 
-// Components treated as "kernel & friends" by the default scope.
-export const KERNEL_COMPONENTS = [
-  "Kernel",
-  "IOKit",
-  "AMD Kernel",
-  "Kext Management",
-  "Sandbox",
-  "APFS",
-  "HFS",
-  "SMB",
-  "NFS",
-  "Networking",
-  "ASP TCP",
-  "IOMobileFrameBuffer",
-  "IOSurface",
-  "IOSurfaceAccelerator",
-  "IOGPUFamily",
-  "IOHIDFamily",
-  "IOUSBHostFamily",
-  "AppleAVD",
-  "Apple Neural Engine",
-  "dyld",
-  "libxpc",
-  "Libsystem",
-];
+/** A project's content on screen: the write-up, and the diff of the chosen artifact's two versions. */
+export interface AnalysisContent {
+  readme_html: string | null;
+  files: DiffFile[];
+  /** Present when the two versions are binaries; `files` is then empty and a function's diff loads on demand. */
+  binary?: BinaryFunction[];
+  /** The project's artifacts, the one on screen, and the two version ids being diffed. */
+  artifacts: Artifact[];
+  artifact?: Artifact;
+  base?: string;
+  head?: string;
+  /** The project folder, to resolve versions for the binary drill-in. */
+  project?: string;
+  /** The project uses artifacts, which only the desktop app can diff. */
+  needsDesktop?: boolean;
+}
 
 /** The GitHub user the app acts as. */
 export interface Viewer {

@@ -1,19 +1,22 @@
 # SPDX-License-Identifier: GPL-3.0-only
 """
-Scrape Apple security advisories + NVD metadata into the static JSON API Difflicit reads.
+Scrape Apple security advisories + NVD metadata into ivx/xnu's project catalog: the static JSON API Difflicit
+reads (its format is src/types.ts), where each project is a CVE.
 
     uv run main.py                       # writes out/api/
     uv run main.py --limit 20            # only the first 20 advisories (quick test)
-    uv run main.py --out ../public/api   # serve it to `npm run dev` (with VITE_API_BASE=/api)
+    uv run main.py --out ../public/api   # serve it to `npm run dev` (with VITE_CATALOG=/api)
 
 Output:
-    index.json            manifest: totals, and the year and component shards below
-    years/2026.json       summaries of the CVEs whose id is CVE-2026-*
+    index.json              manifest: totals, facets and the year and component shards below
+    years/2026.json         summaries of the CVEs whose id is CVE-2026-*
     components/kernel.json  summaries of the CVEs Apple lists under that component
-    cves/CVE-….json       one file per CVE: NVD data + every advisory entry
+    projects/CVE-….json     one file per CVE: NVD data + every advisory entry, as display sections
+
+Which CVEs are analyzed comes from the owner's public repositories, found by the naming convention in
+difflicit.config.json and confirmed by their analysis.json.
 
 Environment:
-    ANALYSIS_ORG   GitHub account whose CVE-YYYY-NNNN repos mark CVEs as analyzed (default: ivxlabs)
     GITHUB_TOKEN   optional, avoids GitHub's 60 requests/hour anonymous limit
 """
 
@@ -51,12 +54,43 @@ HEADING_RE = re.compile(r"^(?:#{3,4}\s+(.+?)|\*\*([^*]+?)\*\*)\s*$")
 FIELD_RE = re.compile(r"^(Impact|Description|Available for):\s*(.*)$")
 CVE_LINE_RE = re.compile(r"^(CVE-\d{4}-\d{4,7})(?::\s*(.*))?$")
 
-ANALYSIS_ORG = os.environ.get("ANALYSIS_ORG", "ivxlabs")
+# The instance's settings, shared with the app: who publishes analyses, and how their repositories are named.
+with open(os.path.join(BASE_DIR, "..", "difflicit.config.json"), encoding="utf-8") as f:
+    PROJECTS = json.load(f)["projects"]
+ANALYSIS_REPO_RE = re.compile(
+    "^" + re.escape(PROJECTS["repo"]).replace(re.escape("{id}"), f"({PROJECTS['id']})") + "$", re.I
+)
+
+# Facets shown in the picker. Components treated as "kernel & friends" are its default scope.
+PLATFORMS = ["macOS", "iOS", "iPadOS", "watchOS", "tvOS", "visionOS", "Safari", "Xcode"]
+KERNEL_COMPONENTS = [
+    "Kernel",
+    "IOKit",
+    "AMD Kernel",
+    "Kext Management",
+    "Sandbox",
+    "APFS",
+    "HFS",
+    "SMB",
+    "NFS",
+    "Networking",
+    "ASP TCP",
+    "IOMobileFrameBuffer",
+    "IOSurface",
+    "IOSurfaceAccelerator",
+    "IOGPUFamily",
+    "IOHIDFamily",
+    "IOUSBHostFamily",
+    "AppleAVD",
+    "Apple Neural Engine",
+    "dyld",
+    "libxpc",
+    "Libsystem",
+]
 
 # Every URL that couldn't be fetched. Output replaces what's published (the upload deletes what's gone),
 # so a run with any failure writes nothing rather than publishing partial data.
 FAILED: list[str] = []
-ANALYSIS_REPO_RE = re.compile(r"^CVE-\d{4}-\d{4,}$", re.I)
 
 
 # ---------------------------------------------------------------------------
@@ -220,11 +254,14 @@ async def load_nvd(session: aiohttp.ClientSession, cves: set[str]) -> dict[str, 
 # ---------------------------------------------------------------------------
 
 
-async def fetch(session, url: str, headers: dict | None = None, attempts: int = 3) -> bytes | None:
-    """GET with retries. A URL that never succeeds is recorded in FAILED and gives None."""
+async def fetch(session, url: str, headers: dict | None = None, attempts: int = 3, missing_ok: bool = False) -> bytes | None:
+    """GET with retries. A URL that never succeeds is recorded in FAILED and gives None; so does a 404, without
+    counting as a failure, when `missing_ok`."""
     for attempt in range(attempts):
         try:
             async with session.get(url, headers=headers) as res:
+                if missing_ok and res.status == 404:
+                    return None
                 res.raise_for_status()
                 return await res.read()
         except Exception as e:  # noqa: BLE001 - retried, then reported
@@ -299,22 +336,36 @@ async def scrape_advisory(session, url: str, title: str) -> dict | None:
 
 
 async def load_analyzed(session: aiohttp.ClientSession) -> set[str]:
-    """CVE ids that have a public github.com/<ANALYSIS_ORG>/CVE-YYYY-NNNN repo."""
+    """Lowercased ids of the projects the owner has published an analysis of: a public repository named by the
+    convention whose analysis.json names that project."""
+    owner = PROJECTS["owner"]
     headers = {"accept": "application/vnd.github+json"}
     if token := os.environ.get("GITHUB_TOKEN"):
         headers["authorization"] = f"Bearer {token}"
-    names: set[str] = set()
+    candidates: list[tuple[str, dict]] = []
     for page in range(1, 100):
-        url = f"https://api.github.com/users/{ANALYSIS_ORG}/repos?type=public&per_page=100&page={page}"
+        url = f"https://api.github.com/users/{owner}/repos?type=public&per_page=100&page={page}"
         body = await fetch(session, url, headers)
         if body is None:
             return set()
         batch = json.loads(body)
-        names |= {r["name"].upper() for r in batch if ANALYSIS_REPO_RE.match(r["name"])}
+        candidates += [(m.group(1), r) for r in batch if (m := ANALYSIS_REPO_RE.match(r["name"]))]
         if len(batch) < 100:
             break
-    print(f"GitHub: {len(names)} analysis repos in {ANALYSIS_ORG}")
-    return names
+
+    async def analyzes(project: str, repo: dict) -> bool:
+        # raw.githubusercontent.com doesn't count against the API rate limit.
+        url = f"https://raw.githubusercontent.com/{repo['full_name']}/{repo['default_branch']}/analysis.json"
+        body = await fetch(session, url, missing_ok=True)
+        try:
+            return body is not None and str(json.loads(body).get("project", "")).lower() == project.lower()
+        except (ValueError, AttributeError):
+            return False
+
+    checks = await asyncio.gather(*[analyzes(p, r) for p, r in candidates])
+    ids = {p.lower() for (p, _), ok in zip(candidates, checks) if ok}
+    print(f"GitHub: {len(ids)} analyses published by {owner} ({len(candidates)} repositories named by the convention)")
+    return ids
 
 
 # ---------------------------------------------------------------------------
@@ -332,9 +383,75 @@ def _write_json(path: str, data) -> None:
         json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
 
 
+def _badge(n: dict) -> dict | None:
+    """A CVE's severity (and CVSS score), coloured by severity."""
+    if not n.get("severity"):
+        return None
+    score = n.get("cvss_score")
+    return {"label": n["severity"] + (f" {score:.1f}" if score is not None else ""), "tone": n["severity"].lower()}
+
+
+def _sections(cve: str, n: dict, entries: list[dict]) -> list[dict]:
+    """What Apple and NVD say about a CVE, as the project header's sections."""
+    # The same CVE often appears in several advisories with an identical write-up; show each write-up once.
+    writeups: dict[tuple, dict] = {}
+    for e in entries:
+        writeups.setdefault((e["component"], e["description"]), e)
+    nvd: list[dict] = [{"type": "text", "text": n.get("description") or "No NVD description."}]
+    if n.get("cvss_vector"):
+        nvd.append({"type": "code", "label": f"CVSS {n['cvss_version']}", "code": n["cvss_vector"]})
+    if n.get("cwes"):
+        nvd.append(
+            {
+                "type": "tags",
+                "items": [
+                    {"label": w, "url": f"https://cwe.mitre.org/data/definitions/{w.removeprefix('CWE-')}.html"}
+                    for w in n["cwes"]
+                ],
+            }
+        )
+    refs = [{"label": "NVD entry", "url": f"https://nvd.nist.gov/vuln/detail/{cve}"}]
+    refs.append({"label": "cve.org", "url": f"https://www.cve.org/CVERecord?id={cve}"})
+    refs += [
+        {"label": r["url"], "url": r["url"], **({"note": ", ".join(r["tags"])} if r["tags"] else {})}
+        for r in n.get("refs", [])
+        if "support.apple.com" not in r["url"]
+    ][:10]
+    return [
+        {
+            "title": "Apple",
+            "blocks": [
+                {
+                    "type": "entry",
+                    "title": e["component"] or "Unspecified component",
+                    "detail": e["impact"],
+                    "notes": [x for x in (e["description"], e["credit"] and f"Credit: {e['credit']}") if x],
+                }
+                for e in writeups.values()
+            ],
+        },
+        {"title": "NVD", "blocks": nvd},
+        {"title": "References", "wide": True, "blocks": [{"type": "links", "items": refs}]},
+    ]
+
+
+def _menu(entries: list[dict]) -> dict:
+    """The advisories a CVE was fixed in, newest first."""
+    advisories: dict[str, dict] = {}
+    for e in entries:
+        advisories.setdefault(e["advisory_id"], e)
+    return {
+        "label": "Fixed in",
+        "items": [
+            {"title": a["title"], "detail": f"{a['released'] or 'undated'} · {', '.join(a['platforms'])}", "url": a["url"]}
+            for a in advisories.values()
+        ],
+    }
+
+
 def write_api(out: str, advisories: list[dict], nvd: dict[str, dict], analyzed: set[str]) -> None:
     shutil.rmtree(out, ignore_errors=True)
-    os.makedirs(os.path.join(out, "cves"))
+    os.makedirs(os.path.join(out, "projects"))
 
     # Group every advisory entry under its CVE, newest advisory first.
     by_cve: dict[str, list[dict]] = {}
@@ -357,34 +474,37 @@ def write_api(out: str, advisories: list[dict], nvd: dict[str, dict], analyzed: 
     index = []
     for cve, entries in by_cve.items():
         n = nvd.get(cve, {})
+        components = list(dict.fromkeys(e["component"] for e in entries if e["component"]))
+        impact = next((e["impact"] for e in entries if e["impact"]), None)
         _write_json(
-            os.path.join(out, "cves", f"{cve}.json"),
+            os.path.join(out, "projects", f"{cve}.json"),
             {
                 "id": cve,
-                "severity": n.get("severity"),
-                "cvss_score": n.get("cvss_score"),
-                "cvss_version": n.get("cvss_version"),
-                "cvss_vector": n.get("cvss_vector"),
-                "nvd_description": n.get("description"),
-                "cwes": n.get("cwes", []),
-                "refs": n.get("refs", []),
-                "entries": entries,
+                "summary": impact,
+                "badge": _badge(n),
+                "tags": components,
+                "sections": _sections(cve, n, entries),
+                "menu": _menu(entries),
             },
         )
         index.append(
             {
                 "id": cve,
-                "severity": n.get("severity"),
-                "cvss_score": n.get("cvss_score"),
-                "components": list(dict.fromkeys(e["component"] for e in entries if e["component"])),
-                "impact": next((e["impact"] for e in entries if e["impact"]), None),
-                "released": max((e["released"] for e in entries if e["released"]), default=None),
-                "platforms": sorted({p for e in entries for p in e["platforms"]}),
-                "analyzed": cve in analyzed,
+                "summary": impact,
+                "date": max((e["released"] for e in entries if e["released"]), default=None),
+                "badge": _badge(n),
+                "tags": components,
+                "facets": {
+                    "severity": n.get("severity"),
+                    "year": cve.split("-")[1],
+                    "platform": sorted({p for e in entries for p in e["platforms"]}),
+                    "component": components,
+                },
+                "analyzed": cve.lower() in analyzed,
             }
         )
 
-    index.sort(key=lambda c: (c["released"] or "", c["id"]), reverse=True)
+    index.sort(key=lambda c: (c["date"] or "", c["id"]), reverse=True)
 
     # Shards, so a browser only downloads the slice it is looking at: by the CVE id's year, and by component.
     # Grouped by file name, so names that only differ in case or punctuation ("Wi-Fi", "Wi Fi") share a shard.
@@ -400,19 +520,31 @@ def write_api(out: str, advisories: list[dict], nvd: dict[str, dict], analyzed: 
             listing.append({"name": name, "file": f"{folder}/{slug}.json", "count": len(cves)})
         return listing
 
+    years = sorted(shard("years", lambda c: [c["facets"]["year"]]), key=lambda s: s["name"], reverse=True)
+    components = sorted(shard("components", lambda c: c["facets"]["component"]), key=lambda s: -s["count"])
+    analyzed_count = sum(c["analyzed"] for c in index)
     _write_json(
         os.path.join(out, "index.json"),
         {
             "generated": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            "org": ANALYSIS_ORG,
-            "advisories": len(advisories),
-            "cves": len(index),
-            "analyzed": sum(c["analyzed"] for c in index),
-            "years": sorted(shard("years", lambda c: [c["id"].split("-")[1]]), key=lambda s: s["name"], reverse=True),
-            "components": sorted(shard("components", lambda c: c["components"]), key=lambda s: -s["count"]),
+            "title": "Find the patch behind every Apple CVE",
+            "about": "Apple security advisories since 2020, with NVD data.",
+            "stats": [
+                {"label": "CVEs", "value": len(index)},
+                {"label": "advisories", "value": len(advisories)},
+                {"label": "analyzed", "value": analyzed_count},
+            ],
+            # The first facet with shards (years, newest first) is the default view.
+            "facets": [
+                {"key": "severity", "any": "Any severity", "values": list(SEVERITIES.values())},
+                {"key": "year", "any": "All years", "shards": years, "match": r"CVE-(\d{4})"},
+                {"key": "platform", "any": "All platforms", "values": PLATFORMS},
+                {"key": "component", "any": "All components", "shards": components},
+            ],
+            "scopes": [{"label": "Kernel & friends", "facet": "component", "values": KERNEL_COMPONENTS}],
         },
     )
-    print(f"Wrote {out}: {len(advisories)} advisories, {len(index)} CVEs, {len(analyzed)} analyzed")
+    print(f"Wrote {out}: {len(advisories)} advisories, {len(index)} CVEs, {analyzed_count} analyzed")
 
 
 # ---------------------------------------------------------------------------

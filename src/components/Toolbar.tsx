@@ -305,7 +305,7 @@ const IvxMark = () => (
   </a>
 );
 
-/** Once the user has forked the published analysis: send their changes back, like GitHub Desktop's primary action. */
+/** Once the user has forked the published analysis: send their changes back upstream. */
 function ContributeButton({ upstream, repos, viewer }: Props & { upstream: Repo }) {
   const mine = viewer && repos.find((r) => r.fork && r.owner.login.toLowerCase() === viewer.login.toLowerCase());
   if (!mine) return null;

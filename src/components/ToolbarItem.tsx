@@ -17,7 +17,7 @@ interface ButtonProps {
   caret?: boolean;
 }
 
-/** A GitHub Desktop toolbar item: icon, small caption, bold value. Renders a link when given `href`. */
+/** A toolbar item: icon, small caption, bold value. Renders a link when given `href`. */
 export function ToolbarButton({ icon, top, main, href, onClick, disabled, width, title, className = "", caret }: ButtonProps) {
   const inner = (
     <>

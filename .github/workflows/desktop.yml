@@ -78,13 +78,19 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # Reuse the draft when re-running, so the builds attach to the same release.
+          # Reuse the release when re-running (a draft, or one already published), so the builds attach to it.
           id=$(gh api "repos/$GITHUB_REPOSITORY/releases" --paginate --jq ".[] | select(.tag_name == \"$TAG\") | .id" | head -n1)
           if [ -z "$id" ]; then
-            flags=()
-            [[ "$TAG" == *-* ]] && flags+=(--prerelease) # v1.2.0-beta.1
-            gh release create "$TAG" --draft --verify-tag --title "Difflicit $TAG" --notes-file notes.md "${flags[@]}"
-            id=$(gh api "repos/$GITHUB_REPOSITORY/releases" --jq ".[] | select(.tag_name == \"$TAG\") | .id" | head -n1)
+            # Created through the API, which answers with the new release's id: listing releases right after
+            # creating one can miss it, and an empty id makes the builds upload nowhere.
+            prerelease=false
+            [[ "$TAG" == *-* ]] && prerelease=true # v1.2.0-beta.1
+            id=$(gh api "repos/$GITHUB_REPOSITORY/releases" -f tag_name="$TAG" -f name="Difflicit $TAG" \
+              -F draft=true -F prerelease="$prerelease" -f body="$(cat notes.md)" --jq .id)
+          fi
+          if [ -z "$id" ]; then
+            echo "::error::Couldn't create or find the release for $TAG."
+            exit 1
           fi
           echo "id=$id" >> "$GITHUB_OUTPUT"
 

@@ -138,7 +138,7 @@ export type Location = { kind: "github"; repo: Repo } | { kind: "local"; path: s
  */
 export type Artifact =
   | { name: string; kind: "git"; repo: string }
-  | { name: string; kind: "file"; versions: { id: string; path: string }[] };
+  | { name: string; kind: "file"; versions: { id: string; path: string }[]; /** the dyld_shared_cache image, when extracted from one */ image?: string };
 
 /** One function in a binary diff (radiff2): its name, how it changed, and a 0–1 similarity. */
 export interface BinaryFunction {
@@ -150,20 +150,26 @@ export interface BinaryFunction {
 }
 
 export interface RepoContent {
-  readme_html: string | null;
+  notes_html: string | null;
+  /** The artifacts its analysis.json declares ([] for stored patches). */
+  artifacts: Artifact[];
   /** Every file changed by the repo's *.diff / *.patch files, in order. */
   files: DiffFile[];
 }
 
-/** A project's content on screen: the write-up, and the diff of the chosen artifact's two versions. */
+/** A project's content on screen: the notes, and the diff of the chosen artifact's two versions. */
 export interface AnalysisContent {
-  readme_html: string | null;
+  /** The notes (Markdown or diffmd) rendered to HTML, and the file they came from (desktop). */
+  notes_html: string | null;
+  notes_path?: string | null;
   files: DiffFile[];
   /** Present when the two versions are binaries; `files` is then empty and a function's diff loads on demand. */
   binary?: BinaryFunction[];
   /** The project's artifacts, the one on screen, and the two version ids being diffed. */
   artifacts: Artifact[];
   artifact?: Artifact;
+  /** The base version's artifact, when comparing two different artifacts. */
+  baseArtifact?: Artifact;
   base?: string;
   head?: string;
   /** The project folder, to resolve versions for the binary drill-in. */
@@ -171,6 +177,25 @@ export interface AnalysisContent {
   /** The project uses artifacts, which only the desktop app can diff. */
   needsDesktop?: boolean;
 }
+
+/** Desktop: what a file or folder picked in a project's sidebar tree is, and what to show for it (info.rs). */
+export type FileInfo = { path: string; name: string; size: number; modified: number | null } & (
+  | { kind: "dir"; entries: { name: string; path: string; dir: boolean }[] }
+  | { kind: "project"; json: Record<string, unknown> | null; notes: string | null }
+  | { kind: "notes"; html: string; text: string; truncated: boolean }
+  | { kind: "patch" | "text"; text: string; truncated: boolean }
+  | {
+      kind: "binary";
+      format: string;
+      /** rabin2's view of it; null when radare2 isn't installed. */
+      binary: {
+        info: Record<string, unknown> | null;
+        libs: string[];
+        sections: { name: string; size: number; vsize: number; perm: string; vaddr: number; paddr: number }[];
+        headers: { offset: string; name: string; format: string }[];
+      } | null;
+    }
+);
 
 /** The GitHub user the app acts as. */
 export interface Viewer {

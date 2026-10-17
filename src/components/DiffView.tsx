@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ColumnsIcon, RowsIcon } from "@primer/octicons-react";
-import { diffLines, toSplitRows, type DiffFile, type DiffLine, type SplitRow } from "../lib/diff";
+import { changedPart, diffLines, toSplitRows, type DiffFile, type DiffLine, type SplitRow } from "../lib/diff";
 import { useCommand } from "../lib/commands";
 import { BlankSlate } from "./BlankSlate";
 
@@ -137,7 +137,9 @@ function UnifiedRow({ line, target }: { line: DiffLine; target: boolean }) {
     <tr className={`${line.type} ${target ? "target" : ""}`}>
       <td className="ln">{line.oldNo}</td>
       <td className="ln">{line.newNo}</td>
-      <td className="code">{line.text}</td>
+      <td className="code">
+        <Code line={line} />
+      </td>
     </tr>
   );
 }
@@ -158,7 +160,7 @@ function SplitTableRow({ row, target }: { row: SplitRow; target: boolean }) {
       <>
         <td className={`ln ${gap} ${line.type}`}>{no}</td>
         <td className={`code ${line.type}`} title={line.text}>
-          {line.text}
+          <Code line={line} />
         </td>
       </>
     ) : (
@@ -169,5 +171,19 @@ function SplitTableRow({ row, target }: { row: SplitRow; target: boolean }) {
       {side(row.left, row.left?.oldNo, "")}
       {side(row.right, row.right?.newNo, "split-gap")}
     </tr>
+  );
+}
+
+/** A line's text, with what changed from its peer (the line it replaced, or was replaced by) marked. */
+function Code({ line }: { line: DiffLine }) {
+  const part = line.type === "add" || line.type === "del" ? changedPart(line) : null;
+  if (!part) return <>{line.text}</>;
+  const [start, end] = part;
+  return (
+    <>
+      {line.text.slice(0, start)}
+      <span className="word">{line.text.slice(start, end)}</span>
+      {line.text.slice(end)}
+    </>
   );
 }

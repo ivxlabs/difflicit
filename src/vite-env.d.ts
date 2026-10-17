@@ -14,3 +14,16 @@ interface ImportMetaEnv {
 
 /** True when the build was configured to sign in with ivx (see vite.config.ts). Constant-folded at build time. */
 declare const __IAM__: boolean;
+
+// noVNC ships no type declarations; we use the RFB class loosely in the desktop VNC viewer.
+declare module "@novnc/novnc" {
+  const RFB: new (target: Element, url: string, options?: { credentials?: { password?: string } }) => {
+    scaleViewport: boolean;
+    background: string;
+    focusOnClick: boolean;
+    addEventListener(type: string, listener: (e: CustomEvent) => void): void;
+    sendCredentials(credentials: { password?: string }): void;
+    disconnect(): void;
+  };
+  export default RFB;
+}

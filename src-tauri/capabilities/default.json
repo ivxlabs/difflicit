@@ -9,8 +9,48 @@
     "core:default",
     "core:window:allow-start-dragging",
     "core:window:allow-internal-toggle-maximize",
+    "core:window:allow-set-title",
+    "core:window:allow-set-focus",
+    "core:window:allow-unminimize",
     "deep-link:default",
     "opener:default",
-    "dialog:allow-open"
+    {
+      "identifier": "opener:allow-open-path",
+      "allow": [
+        {
+          "path": "**/*.diffmd"
+        },
+        {
+          "path": "**/*.md"
+        },
+        {
+          "path": "**/*.markdown"
+        },
+        {
+          "path": "**/*.txt"
+        },
+        {
+          "path": "**/*.json"
+        },
+        {
+          "path": "**/*.diff"
+        },
+        {
+          "path": "**/*.patch"
+        }
+      ]
+    },
+    "dialog:allow-open",
+    {
+      "identifier": "http:default",
+      "allow": [
+        {
+          "url": "https://iam.ivx.run/*"
+        },
+        {
+          "url": "https://*.supabase.co/*"
+        }
+      ]
+    }
   ]
 }

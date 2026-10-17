@@ -30,6 +30,7 @@
   --add-bg: rgba(46, 160, 67, 0.15);
   --add-gutter: rgba(46, 160, 67, 0.3);
   --add-word: rgba(46, 160, 67, 0.4);
+  --del-word: rgba(248, 81, 73, 0.4);
   --add-fg: #3fb950;
   --del-bg: rgba(248, 81, 73, 0.12);
   --del-gutter: rgba(248, 81, 73, 0.3);
@@ -68,6 +69,7 @@
     --add-bg: #e6ffed;
     --add-gutter: #cdffd8;
     --add-word: #acf2bd;
+    --del-word: #fdb8c0;
     --add-fg: #22863a;
     --del-bg: #ffeef0;
     --del-gutter: #ffdce0;
@@ -765,6 +767,20 @@ code,
 .diff-table td.del.ln {
   background: var(--del-gutter);
 }
+/* What changed within a line, against the line it replaced (or was replaced by). */
+.diff-table .word {
+  border-radius: 3px;
+  font-weight: 700;
+  color: var(--text-strong);
+}
+.diff-table tr.add .word,
+.diff-table td.add .word {
+  background: var(--add-word);
+}
+.diff-table tr.del .word,
+.diff-table td.del .word {
+  background: var(--del-word);
+}
 .diff-table tr.context .code::before,
 .diff-table td.context.code::before {
   content: " ";
@@ -949,6 +965,45 @@ button.sidebar-header.repo-link {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Project file tree: the folder header toggles it, each folder expands lazily. */
+.sidebar-header.tree-root {
+  cursor: pointer;
+}
+.icon-link {
+  display: inline-flex;
+  border: 0;
+  background: none;
+  padding: 2px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  border-radius: 4px;
+}
+.icon-link:hover {
+  color: var(--text);
+  background: var(--bg-alt);
+}
+.sidebar-section.tree {
+  flex: none;
+  max-height: 45%;
+  border-bottom: 1px solid var(--border);
+}
+.tree-node .tree-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: ltr;
+  text-align: left;
+}
+.tree-folder-icon {
+  color: var(--accent);
+}
+.sidebar-note {
+  padding: 8px 10px;
+  font-size: 12px;
 }
 .avatar-img {
   width: 20px;
@@ -1163,7 +1218,7 @@ button.sidebar-header.repo-link {
 .btn.embed-open:hover {
   text-decoration: none;
 }
-/* Narrow embeds (an article column) show just the chosen file or write-up. */
+/* Narrow embeds (an article column) show just the chosen file or notes. */
 @media (max-width: 640px) {
   .app.embed .body {
     grid-template-columns: 1fr;
@@ -1247,6 +1302,135 @@ button.sidebar-header.repo-link {
   flex: 1;
   min-width: 0;
 }
+/* Shared-cache (ipsw) source in Add artifact. */
+.dsc {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.dsc-sources {
+  flex-wrap: wrap;
+}
+.dsc .grow {
+  flex: 1;
+  min-width: 0;
+}
+.dsc-download,
+.dsc-compare {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.input-icon {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding-left: 8px;
+  color: var(--text-secondary);
+}
+.input-icon .input {
+  border: 0;
+  flex: 1;
+  min-width: 0;
+  background: none;
+}
+.dsc-images {
+  max-height: 180px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.dsc-images .list-item:last-child {
+  border-bottom: none;
+}
+
+/* VNC sandbox menu + viewer (desktop). */
+.sandbox-menu .list-item .main.connect {
+  cursor: pointer;
+}
+.sandbox-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+}
+.sandbox-form .row {
+  display: flex;
+  gap: 6px;
+}
+.sandbox-form .input {
+  flex: 1;
+  min-width: 0;
+}
+.sandbox-form .input.sandbox-port {
+  flex: 0 0 72px;
+}
+.vnc-backdrop {
+  align-items: stretch;
+  justify-content: stretch;
+  padding: 24px;
+}
+.vnc {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  background: #0b0e14;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.vnc-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
+.vnc-title {
+  font-weight: 600;
+}
+.vnc-status {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--bg-alt);
+  color: var(--text-secondary);
+}
+.vnc-status.connected {
+  color: var(--add-fg);
+}
+.vnc-status.connecting {
+  color: var(--text-secondary);
+}
+.vnc-status.disconnected {
+  color: var(--del-fg);
+}
+.vnc-pass {
+  display: flex;
+  gap: 6px;
+}
+.vnc-error {
+  margin: 8px 10px 0;
+}
+.vnc-screen {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+}
+.vnc-screen > div {
+  margin: auto;
+}
+
 .modal .btn.file-btn {
   justify-content: flex-start;
   overflow: hidden;
@@ -1287,4 +1471,330 @@ button.sidebar-header.repo-link {
 }
 .artifacts-menu > .btn {
   margin: 8px 10px;
+}
+
+/* ----------------------------------------------------------------- welcome (no project open) */
+
+.welcome {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 14px;
+  padding: 8vh 24px 48px;
+}
+.welcome-logo {
+  border-radius: 16px;
+}
+.welcome h2 {
+  margin: 0;
+  font-size: 22px;
+  color: var(--text-strong);
+}
+.welcome > p {
+  margin: 0;
+  max-width: 440px;
+  line-height: 1.6;
+}
+.welcome-tagline {
+  margin-top: -6px;
+  font-size: 15px;
+}
+.welcome-recent {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: min(460px, 92vw);
+  margin-top: 4px;
+}
+.welcome-project {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: left;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-alt);
+  cursor: pointer;
+  color: var(--text);
+}
+.welcome-project:hover {
+  border-color: var(--accent);
+}
+.welcome-project .title {
+  font-weight: 600;
+}
+.welcome-project .sub {
+  font-size: 12px;
+}
+.welcome-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin-top: 6px;
+}
+.partners {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(460px, 92vw);
+  margin-top: 20px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border);
+}
+.partners-head {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.partner {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: left;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  text-decoration: none;
+  color: var(--text);
+}
+.partner:hover {
+  border-color: var(--accent);
+  text-decoration: none;
+}
+.partner-name {
+  font-weight: 600;
+}
+.partner-desc {
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* Notes (Markdown / diffmd): diff fences become real diffs, each sized to its content. */
+.notes-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 32px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-secondary);
+  flex: none;
+}
+.notes-diff {
+  display: flex;
+  flex-direction: column;
+  margin: 12px 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.notes-diff > .diff {
+  flex: 1;
+}
+.notes-raw {
+  white-space: pre-wrap;
+}
+
+/* A file or folder picked in the project tree. */
+.file-info {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+  padding: 16px 32px 32px;
+}
+.file-info-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-bottom: 12px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+.file-info-head .grow {
+  flex: 1;
+  min-width: 0;
+}
+.file-info-head .title {
+  font-weight: 600;
+}
+.file-info-head .sub {
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Nested in the info panel, notes scroll with it rather than on their own. */
+.file-info .markdown {
+  overflow: visible;
+  padding: 0;
+  flex: none;
+}
+.file-info h3 {
+  margin: 20px 0 8px;
+  font-size: 13px;
+}
+.file-info-entries,
+.project-file > .list-item {
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+}
+.file-text {
+  margin: 0;
+  padding: 12px;
+  overflow: auto;
+  font-size: 12px;
+  line-height: 1.5;
+  background: var(--bg-alt);
+  border-radius: 6px;
+}
+.facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 16px;
+  margin: 0;
+}
+.facts .fact {
+  display: contents;
+}
+.facts dt {
+  color: var(--text-secondary);
+}
+.facts dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.info-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 12px;
+}
+.info-table th {
+  text-align: left;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+.info-table th,
+.info-table td {
+  padding: 3px 12px 3px 0;
+  border-bottom: 1px solid var(--border-soft);
+}
+.info-list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
+}
+button.link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 0;
+  padding: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+}
+button.link:hover {
+  text-decoration: underline;
+}
+.file-info details {
+  margin-top: 10px;
+}
+.file-info details > .facts {
+  margin-top: 6px;
+}
+
+/* A note (desktop), block by block: each block rendered, its actions on hover; the one being edited as source. */
+.note-block {
+  position: relative;
+  margin: 0 -12px;
+  padding: 1px 12px;
+  border-radius: 6px;
+}
+.note-block:hover:not(.editing) {
+  background: var(--bg-alt);
+}
+.note-block-actions {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: none;
+  gap: 2px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.note-block:hover .note-block-actions {
+  display: flex;
+}
+.note-block-menu {
+  left: auto;
+  right: 0;
+  min-width: 180px;
+}
+.note-block-menu .list-item {
+  width: 100%;
+  border-width: 0 0 1px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+.note-block.editing {
+  margin: 8px -12px;
+  padding: 8px 12px;
+  border: 1px solid var(--accent);
+}
+.note-block-text {
+  display: block;
+  width: 100%;
+  resize: vertical;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.6;
+  tab-size: 4;
+}
+.note-block-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-soft);
+}
+.note-add {
+  margin-top: 16px;
+}
+
+/* Analyze: the two sides to compare. */
+.analyze-dialog {
+  width: min(720px, 92vw);
+}
+.analyze-sides {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.analyze-side {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.analyze-side-label {
+  font-weight: 600;
+  font-size: 12px;
 }

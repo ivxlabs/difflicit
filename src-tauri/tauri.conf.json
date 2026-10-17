@@ -33,7 +33,7 @@
     "active": true,
     "targets": "all",
     "category": "DeveloperTool",
-    "shortDescription": "Patch diffing and analysis for CVEs",
+    "shortDescription": "Patch diff anything",
     "copyright": "Copyright (C) 2026 ivx research (Vikrant Singh Chauhan). GPL-3.0-only.",
     "license": "GPL-3.0-only",
     "icon": [

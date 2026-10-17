@@ -12,7 +12,10 @@ async function gh(path: string, init: RequestInit & { accept?: string } = {}): P
   headers.set("accept", init.accept ?? "application/vnd.github+json");
   const auth = await access.authorization();
   if (auth) headers.set("authorization", auth);
-  const res = await fetch(`${auth ? access.base : GITHUB_API}${path}`, { ...init, headers });
+  // Authenticated calls go to access.base (api.github.com, or iam's proxy). The desktop app must reach iam's
+  // proxy natively (access.fetch), since its CORS only allows the website; anonymous calls use the browser.
+  const doFetch = (auth && access.fetch) || fetch;
+  const res = await doFetch(`${auth ? access.base : GITHUB_API}${path}`, { ...init, headers });
   if ((res.status === 403 || res.status === 429) && res.headers.get("x-ratelimit-remaining") === "0") {
     throw new Error(
       auth
@@ -42,17 +45,6 @@ async function ghAll<T>(path: string): Promise<T[]> {
 }
 
 export const getRepo = (fullName: string) => ghJson<Repo>(`/repos/${fullName}`);
-
-/** The artifacts a GitHub analysis declares in its analysis.json, or [] for stored patches. */
-export async function githubArtifacts(repo: Repo): Promise<Artifact[]> {
-  const res = await gh(`/repos/${repo.full_name}/contents/analysis.json`, { accept: "application/vnd.github.raw" });
-  if (!res.ok) return [];
-  try {
-    return (JSON.parse(await res.text()).artifacts as Artifact[]) ?? [];
-  } catch {
-    return [];
-  }
-}
 
 /** The GitHub user the app acts as; null when not connected. */
 export const viewer = async () =>
@@ -104,10 +96,12 @@ access.subscribe(myAnalysisRepos.reset);
 
 const base64 = (text: string) => btoa(String.fromCharCode(...new TextEncoder().encode(text)));
 
+const encodePath = (path: string) => path.split("/").map(encodeURIComponent).join("/");
+
 /** A file's text on the default branch; null when it's missing. */
 async function fileText(repo: Repo, path: string): Promise<string | null> {
   const branch = encodeURIComponent(repo.default_branch);
-  const encoded = path.split("/").map(encodeURIComponent).join("/");
+  const encoded = encodePath(path);
   // raw.githubusercontent.com doesn't count against the API rate limit, but only serves public repos.
   const res = repo.private
     ? await gh(`/repos/${repo.full_name}/contents/${encoded}?ref=${branch}`, { accept: "application/vnd.github.raw" })
@@ -137,8 +131,8 @@ export async function analysisRepos(owner: string, id: string): Promise<Repo[]> 
 const contents = new Map<string, () => Promise<RepoContent>>();
 
 /**
- * README (rendered by GitHub) and every *.diff / *.patch file on the default branch. Fetched once per push, so
- * the analysis and its search (⌘K) share it.
+ * The notes (rendered by GitHub), the artifacts analysis.json declares, and every *.diff / *.patch file on the
+ * default branch. Fetched once per push, so the analysis and its search (⌘K) share it.
  */
 export function repoContent(repo: Repo): Promise<RepoContent> {
   const key = `${repo.full_name}@${repo.pushed_at}`;
@@ -148,25 +142,60 @@ export function repoContent(repo: Repo): Promise<RepoContent> {
 
 async function fetchContent(repo: Repo, maxPatches = 30): Promise<RepoContent> {
   const branch = encodeURIComponent(repo.default_branch);
-  const [tree, readme] = await Promise.all([
+  const [tree, projectText] = await Promise.all([
     ghJson<{ tree: { path: string; type: string; size?: number }[] }>(
       `/repos/${repo.full_name}/git/trees/${branch}?recursive=1`,
     ),
-    gh(`/repos/${repo.full_name}/readme`, { accept: "application/vnd.github.html" }),
+    fileText(repo, ANALYSIS_FILE),
   ]);
+  let project: { artifacts?: Artifact[]; notes?: string } = {};
+  try {
+    project = JSON.parse(projectText ?? "{}");
+  } catch {
+    // not valid JSON: no artifacts, default notes
+  }
 
   const paths = (tree?.tree ?? [])
     .filter((i) => i.type === "blob" && /\.(diff|patch)$/i.test(i.path) && (i.size ?? 0) < 2_000_000)
     .map((i) => i.path)
     .slice(0, maxPatches);
 
-  const patches = await Promise.all(
-    paths.map(async (path) => {
-      const text = await fileText(repo, path);
-      // Parsed right away so only the per-file text is kept, not a second copy of each patch.
-      return text ? parseUnifiedDiff(text) : [];
-    }),
-  );
+  const [notes_html, patches] = await Promise.all([
+    notesHtml(repo, project.notes),
+    Promise.all(
+      paths.map(async (path) => {
+        const text = await fileText(repo, path);
+        // Parsed right away so only the per-file text is kept, not a second copy of each patch.
+        return text ? parseUnifiedDiff(text) : [];
+      }),
+    ),
+  ]);
 
-  return { readme_html: readme.ok ? await readme.text() : null, files: patches.flat() };
+  return { notes_html, files: patches.flat(), artifacts: project.artifacts ?? [] };
+}
+
+/** The notes, rendered: the file analysis.json's `notes` names (Markdown or diffmd), else the README. */
+async function notesHtml(repo: Repo, notes?: string): Promise<string | null> {
+  if (notes && !notes.split("/").includes("..")) {
+    if (/\.diffmd$/i.test(notes)) {
+      // GitHub doesn't render .diffmd files; render the Markdown with its API (the diff blocks are split out later).
+      const text = await fileText(repo, notes);
+      if (text !== null) return renderMarkdown(text, repo.full_name);
+    } else {
+      const res = await gh(`/repos/${repo.full_name}/contents/${encodePath(notes)}`, { accept: "application/vnd.github.html" });
+      if (res.ok) return res.text();
+    }
+  }
+  const readme = await gh(`/repos/${repo.full_name}/readme`, { accept: "application/vnd.github.html" });
+  return readme.ok ? readme.text() : null;
+}
+
+/** GitHub-flavored Markdown to HTML, by GitHub (links resolve against the repo). Anonymous: no token involved. */
+async function renderMarkdown(text: string, context: string): Promise<string | null> {
+  const res = await fetch(`${GITHUB_API}/markdown`, {
+    method: "POST",
+    headers: { accept: "application/vnd.github+json", "content-type": "application/json" },
+    body: JSON.stringify({ text, mode: "gfm", context }),
+  });
+  return res.ok ? res.text() : null;
 }

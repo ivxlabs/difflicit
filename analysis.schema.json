@@ -1,84 +1,70 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://raw.githubusercontent.com/ivxlabs/difflicit/main/analysis.schema.json",
-  "title": "Difflicit analysis",
-  "description": "analysis.json at the root of a repository or folder makes it a Difflicit analysis of one project. The write-up goes in README.md, the patches in *.diff / *.patch files.",
+  "title": "Difflicit project",
+  "description": "difflicit.json (or analysis.json) at the root of a folder or repository makes it a Difflicit project. It holds artifacts, whose versions you diff, and links the project's notes. Stored *.diff / *.patch files work too.",
   "type": "object",
   "properties": {
     "$schema": {
       "type": "string"
     },
     "project": {
-      "description": "The id of the project this analyzes, as the Difflicit instance names it, e.g. CVE-2024-54494 on xnu.ivx.run.",
+      "description": "The id of the project, as the Difflicit instance names it, e.g. CVE-2024-54494 on xnu.ivx.run. Defaults to the folder name.",
+      "type": "string",
+      "minLength": 1
+    },
+    "notes": {
+      "description": "The project's notes, relative to the project: Markdown, ideally diffmd (Markdown whose diff fences are shown as patch diffs). Defaults to README.diffmd, then README.md. See https://ivx.run/docs/difflicit/diffmd/",
       "type": "string",
       "minLength": 1
     },
     "artifacts": {
-      "description": "The things this project compares (diffed any two at a time). Omit for stored *.diff / *.patch files.",
+      "description": "The things this project compares. Each has versions; you diff two versions of one artifact.",
       "type": "array",
       "items": {
         "oneOf": [
           {
             "type": "object",
-            "required": [
-              "id",
-              "type",
-              "repo",
-              "ref"
-            ],
+            "description": "A git repository; its versions are its tags and commits.",
+            "required": ["name", "kind", "repo"],
             "properties": {
-              "id": {
-                "type": "string"
-              },
-              "type": {
-                "const": "git"
-              },
+              "name": { "type": "string", "minLength": 1 },
+              "kind": { "const": "git" },
               "repo": {
                 "type": "string",
-                "description": "Path to a git repo inside the project (e.g. artifacts/xnu)."
-              },
-              "ref": {
-                "type": "string",
-                "description": "A commit, tag or branch."
+                "description": "Path to the repository inside the project, e.g. artifacts/xnu."
               }
             }
           },
           {
             "type": "object",
-            "required": [
-              "id",
-              "type",
-              "path"
-            ],
+            "description": "A file or folder; its versions are the copies added to it.",
+            "required": ["name", "kind", "versions"],
             "properties": {
-              "id": {
-                "type": "string"
-              },
-              "type": {
-                "enum": [
-                  "file",
-                  "files"
-                ]
-              },
-              "path": {
+              "name": { "type": "string", "minLength": 1 },
+              "kind": { "const": "file" },
+              "image": {
                 "type": "string",
-                "description": "Path to a file (file) or directory (files)."
+                "description": "The dyld_shared_cache image its versions were extracted from, e.g. /usr/lib/libobjc.A.dylib."
+              },
+              "versions": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["id", "path"],
+                  "properties": {
+                    "id": { "type": "string", "minLength": 1 },
+                    "path": {
+                      "type": "string",
+                      "description": "Path to this version inside the project, e.g. artifacts/libobjc/951.7.0.0.0."
+                    }
+                  }
+                }
               }
             }
           }
         ]
       }
-    },
-    "base": {
-      "type": "string",
-      "description": "The default base (older) artifact id."
-    },
-    "head": {
-      "type": "string",
-      "description": "The default head (newer) artifact id."
     }
-  },
-  "required": [
-    "project"
-  ]
+  }
 }

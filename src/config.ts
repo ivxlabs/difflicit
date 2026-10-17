@@ -6,6 +6,8 @@ import instance from "../difflicit.config.json";
 const env = import.meta.env;
 
 export const PRODUCT = "Difflicit";
+/** Difflicit's tagline — the product's, not any instance's. */
+export const TAGLINE = "Patch diff anything!";
 /** This deployment of Difflicit, e.g. ivx/xnu. */
 export const INSTANCE = { name: instance.name, icon: instance.icon };
 
@@ -15,10 +17,14 @@ export const PROJECTS = instance.projects;
 /** Where the project catalog lives; empty means the user's own projects (in the desktop app, ~/Difflicit). */
 export const CATALOG = env.VITE_CATALOG.replace(/\/$/, "");
 export const PROJECT_REPO = env.VITE_PROJECT_REPO;
+
+/** Where to sponsor the project, and sibling projects to point people at when no project is open. */
+export const SPONSOR: string | undefined = (instance as { sponsor?: string }).sponsor;
+export const PARTNERS: { name: string; description: string; url: string }[] = (instance as { partners?: { name: string; description: string; url: string }[] }).partners ?? [];
 export const GITHUB_API = "https://api.github.com";
 
 /** Difflicit's documentation; the app keeps its own text short and links here. */
-export const docsUrl = (page?: "analyses" | "desktop" | "github" | "instances") =>
+export const docsUrl = (page?: "analyses" | "desktop" | "diffmd" | "github" | "instances") =>
   `https://ivx.run/docs/difflicit/${page ? `${page}/` : ""}`;
 
 /** "Sign In" (iam.ivx.run). Only used when __IAM__ is true; empty otherwise, e.g. in `vite dev` without the variables. */

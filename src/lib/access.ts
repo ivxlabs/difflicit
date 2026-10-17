@@ -10,6 +10,8 @@ export interface Access {
   base: string;
   /** Authorization header for calls as the user; null means call GitHub anonymously. */
   authorization(): Promise<string | null>;
+  /** How to make the authenticated request, when it can't use the browser's fetch (desktop + iam; see github.ts). */
+  fetch?: typeof fetch;
   /** Changes whenever the user signs in or out, or their GitHub access changes. */
   snapshot(): string | null;
   subscribe(listener: () => void): () => void;

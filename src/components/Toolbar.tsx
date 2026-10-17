@@ -9,6 +9,7 @@ import {
   LinkExternalIcon,
   LockIcon,
   NoteIcon,
+  PackageIcon,
   RepoForkedIcon,
   RepoIcon,
   StarIcon,
@@ -19,7 +20,9 @@ import type { VersionOption } from "../lib/analysis";
 import { AccountMenu } from "../iam/AccountMenu";
 import { keyLabel, runCommand } from "../lib/commands";
 import { IS_DESKTOP } from "../lib/desktop";
+import type { Sandbox } from "../lib/sandbox";
 import { ProjectPicker } from "./ProjectPicker";
+import { SandboxMenu } from "./SandboxMenu";
 import { ShareMenu } from "./ShareMenu";
 import { Skull } from "./Skull";
 import { StarButton } from "./StarButton";
@@ -35,13 +38,17 @@ interface Props {
   /** The project's artifacts, the one on screen, its versions, and the two version ids being diffed. */
   artifacts: Artifact[];
   artifact?: Artifact;
+  /** When comparing two artifacts: the base version's artifact, and its versions (else the artifact's own). */
+  baseArtifact?: Artifact;
   versions: VersionOption[];
+  baseVersions: VersionOption[];
   base?: string;
   head?: string;
   onArtifact: (name: string) => void;
   onPair: (base: string, head: string) => void;
   onAddArtifact: () => void;
   onAddVersion: (artifact: string) => void;
+  onAddCacheVersion: (artifact: string) => void;
   /** The analysis on screen, a folder or a repository; `repo` is it when it's on GitHub. */
   location: Location | null;
   repo: Repo | null;
@@ -52,6 +59,8 @@ interface Props {
   onPick: (id: string) => void;
   onRepo: (fullName: string) => void;
   onAccount: () => void;
+  /** Desktop: open a VNC sandbox in the viewer. */
+  onConnectSandbox: (sandbox: Sandbox) => void;
 }
 
 const repoKind = (r: Repo) =>
@@ -61,8 +70,8 @@ const RepoKindIcon = ({ repo }: { repo: Repo | null }) =>
   repo?.private ? <LockIcon size={16} /> : repo?.fork ? <RepoForkedIcon size={16} /> : <RepoIcon size={16} />;
 
 export function Toolbar(props: Props) {
-  const { mine, project, projectId, repos, folders, location, repo, upstream, file, viewer, onPick, onRepo, onAccount } = props;
-  const { artifacts, artifact, versions, base, head, onArtifact, onPair, onAddArtifact, onAddVersion } = props;
+  const { mine, project, projectId, repos, folders, location, repo, upstream, file, viewer, onPick, onRepo, onAccount, onConnectSandbox } = props;
+  const { artifacts, artifact, baseArtifact, versions, baseVersions, base, head, onArtifact, onPair, onAddArtifact, onAddVersion, onAddCacheVersion } = props;
   const diffingArtifacts = location?.kind === "local";
   const menu = project?.menu;
 
@@ -85,7 +94,7 @@ export function Toolbar(props: Props) {
         main={projectId ?? "No project opened"}
         width={280}
         title={`Switch project (${keyLabel("o")})`}
-        defaultOpen={!projectId}
+        defaultOpen={!projectId && !IS_DESKTOP}
         command="projects"
       >
         {(close) => (
@@ -101,10 +110,6 @@ export function Toolbar(props: Props) {
               close();
               runCommand("open-folder");
             }}
-            onNewAnalysis={() => {
-              close();
-              runCommand("new-analysis");
-            }}
           />
         )}
       </ToolbarDropdown>
@@ -116,11 +121,19 @@ export function Toolbar(props: Props) {
           diffingArtifacts ? (
             artifact ? (
               <>
-                {artifact.name}
-                {base && head && (
+                {baseArtifact ? (
                   <>
-                    {" "}
-                    <span className="muted">· {base} →</span> {head}
+                    {baseArtifact.name} <span className="muted">· {base} →</span> {artifact.name} <span className="muted">·</span> {head}
+                  </>
+                ) : (
+                  <>
+                    {artifact.name}
+                    {base && head && (
+                      <>
+                        {" "}
+                        <span className="muted">· {base} →</span> {head}
+                      </>
+                    )}
                   </>
                 )}
               </>
@@ -159,9 +172,9 @@ export function Toolbar(props: Props) {
                   )}
                   <div className="artifacts-pair">
                     <label className="field">
-                      <span>Base</span>
-                      <select className="select" value={base ?? ""} onChange={(e) => head && onPair(e.target.value, head)} disabled={!versions.length}>
-                        {versions.map((v) => (
+                      <span>Base{baseArtifact && ` (${baseArtifact.name})`}</span>
+                      <select className="select" value={base ?? ""} onChange={(e) => head && onPair(e.target.value, head)} disabled={!baseVersions.length}>
+                        {baseVersions.map((v) => (
                           <option key={v.id} value={v.id}>
                             {v.label}
                           </option>
@@ -182,15 +195,27 @@ export function Toolbar(props: Props) {
                   </div>
                   {artifact && !versions.length && <div className="muted small-note">Loading versions…</div>}
                   {artifact?.kind === "file" && (
-                    <button
-                      className="btn"
-                      onClick={() => {
-                        close();
-                        onAddVersion(artifact.name);
-                      }}
-                    >
-                      <PlusIcon size={14} /> Add version…
-                    </button>
+                    <div className="row">
+                      <button
+                        className="btn"
+                        onClick={() => {
+                          close();
+                          onAddVersion(artifact.name);
+                        }}
+                      >
+                        <PlusIcon size={14} /> Add version…
+                      </button>
+                      <button
+                        className="btn"
+                        onClick={() => {
+                          close();
+                          onAddCacheVersion(artifact.name);
+                        }}
+                        title="Extract this dylib from another dyld shared cache"
+                      >
+                        <PackageIcon size={14} /> From cache…
+                      </button>
+                    </div>
                   )}
                 </div>
               )}
@@ -275,6 +300,9 @@ export function Toolbar(props: Props) {
       )}
 
       <div className="toolbar-spacer" data-tauri-drag-region />
+
+      {/* Connect to a sandbox VM/box over VNC — a desktop-only capability (needs the native bridge). */}
+      {IS_DESKTOP && <SandboxMenu onConnect={onConnectSandbox} />}
 
       {/* Links from the desktop app would point at the app itself; share from the website instead. */}
       {project && !IS_DESKTOP && <ShareMenu project={project} repo={repo} file={file} />}

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 import { useEffect, useRef, useState } from "react";
-import { CheckIcon, FileDirectoryIcon, GitCompareIcon, LockIcon, RepoIcon, SearchIcon, SyncIcon } from "@primer/octicons-react";
+import { CheckIcon, FileDirectoryIcon, LockIcon, RepoIcon, SearchIcon, SyncIcon } from "@primer/octicons-react";
 import { loadIndex, loadShard, useCatalogVersion } from "../api";
 import { useAsync } from "../lib/util";
 import type { Facet, ProjectSummary, Scope, Shard } from "../types";
@@ -67,13 +67,12 @@ interface Props {
   mine: Set<string>;
   current: string | null;
   onPick: (id: string) => void;
-  /** Desktop: these let the user bring in local analyses. */
+  /** Desktop: open a folder as a project. */
   desktop?: boolean;
   onOpenFolder?: () => void;
-  onNewAnalysis?: () => void;
 }
 
-export function ProjectPicker({ mine, current, onPick, desktop, onOpenFolder, onNewAnalysis }: Props) {
+export function ProjectPicker({ mine, current, onPick, desktop, onOpenFolder }: Props) {
   const [index, indexError] = useAsync(loadIndex, [useCatalogVersion()]);
   const [filters, setFilters] = useState<Filters>(() => ({
     ...DEFAULTS,
@@ -200,14 +199,9 @@ export function ProjectPicker({ mine, current, onPick, desktop, onOpenFolder, on
             );
           })}
           {desktop && (
-            <>
-              <button className="btn" onClick={onNewAnalysis} title="Diff two git refs or two binaries">
-                <GitCompareIcon size={14} /> New analysis…
-              </button>
-              <button className="btn" onClick={onOpenFolder} title="Open a repository you already have">
-                <FileDirectoryIcon size={14} /> Open local…
-              </button>
-            </>
+            <button className="btn" onClick={onOpenFolder} title="Open a folder as a project">
+              <FileDirectoryIcon size={14} /> Open folder…
+            </button>
           )}
           <span className="picker-count" title={`Showing ${where}`}>
             {loading ? <SyncIcon size={12} className="spinner" /> : where && `${items.length.toLocaleString()} in ${where}`}

@@ -28,11 +28,11 @@ projects are Apple CVEs. Read the README's *How it works* first.
 | `src/lib/` | GitHub API (`github.ts`), the diff an analysis shows (`analysis.ts`), project naming (`projects.ts`), auth (`access.ts`), routing (`route.ts`), diff parsing (`diff.ts`), desktop bridge (`desktop.ts`). |
 | `src/types.ts` | The catalog format every instance's API follows. |
 | `src/iam/` | Optional "Sign In" with iam.ivx.run. Only built when `__IAM__` is true; must not run at import time. |
-| `src-tauri/` | The desktop app (Tauri 2, Rust). Local capabilities are Tauri commands in `src/lib.rs`; git and binary (radare2) diffing in `src/diff.rs`. |
+| `src-tauri/` | The desktop app (Tauri 2, Rust). Local capabilities are Tauri commands in `src/lib.rs`; artifacts and diffing (git, radare2, ipsw) in `src/diff.rs`; the project tree's file views and notes in `src/info.rs`; the VNC bridge in `src/vnc.rs`. |
 | `scripts/main.py` | ivx/xnu's scraper: Apple advisories + NVD into the catalog (Python, run with `uv`). |
 | `scripts/release.mjs` | Version bumps and releases. |
 | `difflicit.config.json` | Instance settings: name, icon, API base, and `projects` (label, owner, naming convention). |
-| `analysis.schema.json` | The schema of `analysis.json`. |
+| `analysis.schema.json` | The schema of the project file (`difflicit.json` / `analysis.json`). Notes are diffmd: https://ivx.run/docs/difflicit/diffmd/ |
 | `.github/workflows/` | `pages` (site), `scrape` (data, weekly), `desktop` (release builds on `v*` tags). |
 
 ## Build and check

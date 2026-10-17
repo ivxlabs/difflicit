@@ -56,14 +56,33 @@ const invoke = async <T>(command: string, args?: Record<string, unknown>) =>
 export const localProjects = () =>
   invoke<{ project: string; path: string; folder: string; modified: number }[]>("local_projects", { opened: opened() });
 
-/** Desktop: an analysis folder's project (null without an analysis.json), README as HTML and patch texts. */
+/** Desktop: a project folder's project id (null without a project file), notes as HTML (and their path), and patch texts. */
 export const localAnalysis = (path: string) =>
   invoke<{
     project: string | null;
     artifacts: import("../types").Artifact[] | null;
-    readme_html: string | null;
+    notes_path: string | null;
+    notes_html: string | null;
     patches: { path: string; text: string }[];
   }>("local_analysis", { path });
+
+/** Desktop: what to show for a file or folder picked in the project tree (path relative to the project). */
+export const fileInfo = (project: string, path: string) => invoke<import("../types").FileInfo>("file_info", { project, path });
+
+/**
+ * Desktop: start a note, `<name>.diffmd` (README.diffmd without a name), from a template or with `text` (then
+ * under a free name, never replacing one); a project's first becomes its notes. Returns its path.
+ */
+export const createNote = (project: string, name?: string, text?: string) => invoke<string>("create_note", { project, name, text });
+
+/** Desktop: save a note (a .diffmd or .md file in the project). */
+export const writeNote = (project: string, path: string, text: string) => invoke<void>("write_note", { project, path, text });
+
+/** Desktop: Markdown to HTML, exactly as saved notes are rendered (a note's blocks, one at a time). */
+export const renderMarkdown = (text: string) => invoke<string>("render_markdown", { text });
+
+/** Desktop: open a file in its default app (an editor, for notes). */
+export const openFile = (path: string) => void import("@tauri-apps/plugin-opener").then(({ openPath }) => openPath(path));
 
 /** Desktop: mark a folder as a Difflicit project (writes difflicit.json) if it isn't one. */
 export const initProject = (path: string) => invoke<void>("init_project", { path });
@@ -83,22 +102,79 @@ export const addFileVersion = (project: string, artifact: string, path: string) 
 export const gitVersions = (project: string, repo: string) =>
   invoke<{ tags: string[]; commits: { hash: string; short: string; subject: string; date: string }[] }>("git_versions", { project, repo });
 
-/** Desktop: the diff between two versions of an artifact — unified-diff text, or a binary function table. */
-export const artifactDiff = (project: string, artifact: Artifact, base: string, head: string) =>
+/**
+ * Desktop: the diff between two versions of an artifact — or `base` of another artifact (`baseArtifact`) — as
+ * unified-diff text, or a binary function table.
+ */
+export const artifactDiff = (project: string, artifact: Artifact, base: string, head: string, baseArtifact?: Artifact) =>
   invoke<{ kind: "unified"; text: string } | { kind: "binary"; functions: import("../types").BinaryFunction[] }>(
     "artifact_diff",
-    { project, artifact, base, head },
+    { project, artifact, base, head, baseArtifact },
   );
 
 /** Desktop: one function's disassembly diff between two binary versions of an artifact. */
-export const artifactFunctionDiff = (project: string, artifact: Artifact, base: string, head: string, name: string, baseAddr: string | null, headAddr: string | null) =>
-  invoke<string>("artifact_function_diff", { project, artifact, base, head, name, baseAddr, headAddr });
+export const artifactFunctionDiff = (
+  project: string,
+  artifact: Artifact,
+  base: string,
+  head: string,
+  name: string,
+  baseAddr: string | null,
+  headAddr: string | null,
+  baseArtifact?: Artifact,
+) => invoke<string>("artifact_function_diff", { project, artifact, base, head, name, baseAddr, headAddr, baseArtifact });
 
-/** Desktop: which diff engines are usable here — git, and radiff2/r2 for binaries. */
-export const diffTools = () => invoke<{ git: boolean; binary: boolean }>("diff_tools");
+/** Desktop: which diff engines/tools are usable here — git, radiff2/r2 for binaries, ipsw for firmware. */
+export const diffTools = () => invoke<{ git: boolean; binary: boolean; ipsw: boolean }>("diff_tools");
+
+// ── dyld shared cache / firmware (blacktop/ipsw) ─────────────────────────────
+
+export interface Cache {
+  name: string;
+  path: string;
+}
+export interface Image {
+  name: string;
+  version: string | null;
+}
+
+/** Desktop: dyld_shared_caches on disk — this Mac's, plus any Difflicit downloaded or extracted. */
+export const dscCaches = () => invoke<Cache[]>("dsc_caches");
+
+/** Desktop: the images (dylibs) inside a cache, with versions. */
+export const dscImages = (cache: string) => invoke<Image[]>("dsc_images", { cache });
+
+/** Desktop: extract an image from a cache as a new file artifact (first version). */
+export const addDscArtifact = (project: string, cache: string, image: string, label?: string) =>
+  invoke<{ name: string; version: string }>("add_dsc_artifact", { project, cache, image, label });
+
+/** Desktop: add another version to a file artifact by extracting an image from (another) cache. */
+export const addDscVersion = (project: string, artifact: string, cache: string, image: string, label?: string) =>
+  invoke<string>("add_dsc_version", { project, artifact, cache, image, label });
+
+/** Desktop: pull the dyld_shared_cache(s) out of an IPSW/OTA file. Returns the caches on disk. */
+export const extractCacheFromIpsw = (path: string) => invoke<Cache[]>("extract_cache_from_ipsw", { path });
+
+/** Desktop: download firmware by device and build/version and extract its cache. Can take a long time. */
+export const downloadIpsw = (device: string, build?: string, version?: string) =>
+  invoke<Cache[]>("download_ipsw", { device, build, version });
+
+/** Desktop: ipsw's own cache-level diff — images added, removed and changed between two caches. */
+export const dscDiff = (base: string, head: string) =>
+  invoke<{ added: string[]; removed: string[]; changed: { name?: string; previous?: string; version?: string }[] }>("dsc_diff", { base, head });
+
+/** Desktop: a folder's immediate children (folders first), for the project file tree. */
+export const listDir = (path: string) => invoke<{ name: string; path: string; dir: boolean }[]>("list_dir", { path });
+
+/** Desktop: installed binaries to pick as a file artifact — native apps, and libraries on disk. */
+export const installedBinaries = () =>
+  invoke<{ apps: { name: string; path: string }[]; libraries: { name: string; path: string }[] }>("installed_binaries");
 
 /** Desktop: whether a clone URL is a github.com repo (so connecting GitHub could unblock a failed clone). */
 export const isGithubUrl = (url: string) => invoke<boolean>("is_github", { url });
+
+/** Desktop: open a one-shot WebSocket↔TCP bridge to a VNC sandbox; returns the ws:// URL for noVNC. */
+export const vncConnect = (host: string, port: number) => invoke<{ url: string }>("vnc_connect", { host, port });
 
 /** Desktop: the native file picker for one file; null when cancelled. */
 export async function pickFile(title: string): Promise<string | null> {
@@ -117,20 +193,32 @@ export async function pickFolder(): Promise<string | null> {
 /** Desktop: show a folder in the file manager. */
 export const revealFolder = (path: string) => void import("@tauri-apps/plugin-opener").then(({ revealItemInDir }) => revealItemInDir(path));
 
+/** Desktop: wait for the browser to come back from signing in, on a loopback port; resolves to the URL it hit. */
+export const oauthCallback = (port: number) => invoke<string>("oauth_callback", { port });
+
+/** Desktop: bring the app's window to the front (after signing in in the browser). */
+export const focusWindow = () =>
+  void import("@tauri-apps/api/window").then(async ({ getCurrentWindow }) => {
+    const w = getCurrentWindow();
+    await w.unminimize();
+    await w.setFocus();
+  });
+
+/** Desktop: set the app window's title (the app is Difflicit itself, not any one instance). */
+export const setWindowTitle = (title: string) =>
+  void import("@tauri-apps/api/window").then(({ getCurrentWindow }) => getCurrentWindow().setTitle(title));
+
 /**
- * Desktop: call `handle` for each analyze link the app is opened with, at launch or while running. Links come
- * from any website, so they're checked here and the user confirms before anything is cloned.
+ * Desktop: call `each` for every difflicit:// link the app is handed, at launch and while running (a URL that
+ * won't parse is ignored). Returns an unsubscribe. The specific links are matched by the callers below.
  */
-export function onAnalyzeLink(handle: (project: string, repo: string) => void): () => void {
+function onDeepLink(each: (url: URL) => void): () => void {
   let unlisten: (() => void) | null = null;
   let live = true;
   const take = (urls: string[] | null) => {
     for (const raw of urls ?? []) {
       try {
-        const url = new URL(raw);
-        const project = url.searchParams.get("project") ?? "";
-        const repo = url.searchParams.get("repo") ?? "";
-        if (url.protocol === "difflicit:" && isProjectId(project) && REPO_RE.test(repo)) handle(project, repo);
+        each(new URL(raw));
       } catch {
         // not a URL; ignore it
       }
@@ -148,6 +236,17 @@ export function onAnalyzeLink(handle: (project: string, repo: string) => void): 
     unlisten?.();
   };
 }
+
+/**
+ * Desktop: the website's analyze links (difflicit://analyze?project=…&repo=…). They come from any website, so
+ * they're validated here and the user confirms before anything is cloned.
+ */
+export const onAnalyzeLink = (handle: (project: string, repo: string) => void) =>
+  onDeepLink((url) => {
+    const project = url.searchParams.get("project") ?? "";
+    const repo = url.searchParams.get("repo") ?? "";
+    if (url.protocol === "difflicit:" && isProjectId(project) && REPO_RE.test(repo)) handle(project, repo);
+  });
 
 /**
  * Website: open the analysis in the desktop app. Browsers don't say whether anything handles difflicit://, so

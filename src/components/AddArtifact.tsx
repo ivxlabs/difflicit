@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-only
 import { useState } from "react";
-import { FileDirectoryIcon, FileIcon, GitCompareIcon, XIcon } from "@primer/octicons-react";
+import { FileDirectoryIcon, FileIcon, GitCompareIcon, PackageIcon, XIcon } from "@primer/octicons-react";
 import { CONNECT_LABEL, pat } from "../lib/access";
-import { addFileArtifact, addGitArtifact, diffTools, isGithubUrl, pickFile, pickFolder } from "../lib/desktop";
-import { useAsync } from "../lib/util";
+import { addDscArtifact, addFileArtifact, addGitArtifact, diffTools, installedBinaries, isGithubUrl, pickFile, pickFolder } from "../lib/desktop";
+import { basename, useAsync } from "../lib/util";
 import { DocsLink } from "./BlankSlate";
+import { type CachePick, SharedCacheSource } from "./SharedCache";
 
-type Kind = "git" | "file";
-const basename = (p: string) => p.split(/[\\/]/).filter(Boolean).pop() ?? "";
+type Kind = "git" | "file" | "dsc";
 const isUrl = (r: string) => r.includes("://") || r.startsWith("git@");
 
 /**
@@ -16,9 +16,11 @@ const isUrl = (r: string) => r.includes("://") || r.startsWith("git@");
  */
 export function AddArtifact({ project, onConnect, onDone, onClose }: { project: string; onConnect: () => void; onDone: (artifact: string) => void; onClose: () => void }) {
   const [tools] = useAsync(diffTools, []);
+  const [installed] = useAsync(installedBinaries, []);
   const [kind, setKind] = useState<Kind>("git");
   const [source, setSource] = useState("");
   const [path, setPath] = useState("");
+  const [cachePick, setCachePick] = useState<CachePick | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [needsConnect, setNeedsConnect] = useState(false);
@@ -28,7 +30,9 @@ export function AddArtifact({ project, onConnect, onDone, onClose }: { project: 
     if (p) setPath(p);
   };
 
-  const ready = !busy && (kind === "git" ? Boolean(source.trim()) : Boolean(path));
+  const ready = !busy && (kind === "git" ? Boolean(source.trim()) : kind === "file" ? Boolean(path) : Boolean(cachePick));
+  // Paths the dropdown offers, so it only shows as "selected" when the chosen path is one of them (not a browsed one).
+  const known = installed ? [...installed.apps, ...installed.libraries].map((b) => b.path) : [];
 
   const add = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -45,9 +49,12 @@ export function AddArtifact({ project, onConnect, onDone, onClose }: { project: 
           if (!token && isUrl(source) && (await isGithubUrl(source).catch(() => false))) setNeedsConnect(true);
           throw err;
         }
-      } else {
+      } else if (kind === "file") {
         setBusy("Copying…");
         name = (await addFileArtifact(project, path)).name;
+      } else {
+        setBusy("Extracting the dylib…");
+        name = (await addDscArtifact(project, cachePick!.cache, cachePick!.image, cachePick!.label || undefined)).name;
       }
       onDone(name);
     } catch (err) {
@@ -67,7 +74,8 @@ export function AddArtifact({ project, onConnect, onDone, onClose }: { project: 
         </header>
         <div className="content">
           <p className="muted">
-            Add something to compare — a git repository, or a file or folder. You'll diff two of its versions.{" "}
+            Add something to compare — a git repository, a file or folder, or a dylib from a dyld shared cache.
+            You'll diff two of its versions.{" "}
             <DocsLink page="analyses" />
           </p>
           <div className="segmented">
@@ -77,9 +85,12 @@ export function AddArtifact({ project, onConnect, onDone, onClose }: { project: 
             <button type="button" className={kind === "file" ? "active" : ""} onClick={() => setKind("file")}>
               <FileIcon size={14} /> File or folder
             </button>
+            <button type="button" className={kind === "dsc" ? "active" : ""} onClick={() => setKind("dsc")}>
+              <PackageIcon size={14} /> Shared cache
+            </button>
           </div>
 
-          {kind === "git" ? (
+          {kind === "git" && (
             <label className="field">
               <span>A folder, or a clone URL</span>
               <div className="row">
@@ -89,9 +100,37 @@ export function AddArtifact({ project, onConnect, onDone, onClose }: { project: 
                 </button>
               </div>
             </label>
-          ) : (
+          )}
+          {kind === "file" && (
             <label className="field">
               <span>A file (e.g. a binary) or a folder</span>
+              {installed && (installed.apps.length > 0 || installed.libraries.length > 0) && (
+                <select
+                  className="select"
+                  value={known.includes(path) ? path : ""}
+                  onChange={(e) => e.target.value && setPath(e.target.value)}
+                >
+                  <option value="">Pick an installed app or library…</option>
+                  {installed.apps.length > 0 && (
+                    <optgroup label="Installed apps">
+                      {installed.apps.map((b) => (
+                        <option key={b.path} value={b.path}>
+                          {b.name}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+                  {installed.libraries.length > 0 && (
+                    <optgroup label="Libraries">
+                      {installed.libraries.map((b) => (
+                        <option key={b.path} value={b.path}>
+                          {b.name}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+                </select>
+              )}
               <div className="row">
                 <button type="button" className="btn file-btn" onClick={() => browse(false)}>
                   {path ? <code>{basename(path)}</code> : <><FileIcon size={14} /> Choose file…</>}
@@ -102,6 +141,14 @@ export function AddArtifact({ project, onConnect, onDone, onClose }: { project: 
               </div>
               {tools && !tools.binary && <span className="muted small-note">Install radare2 (radiff2, r2) for binary diffing.</span>}
             </label>
+          )}
+          {kind === "dsc" && (
+            <>
+              <SharedCacheSource onChange={setCachePick} />
+              {tools && !tools.ipsw && (
+                <span className="muted small-note">Install blacktop/ipsw (brew install ipsw) for firmware and shared caches.</span>
+              )}
+            </>
           )}
 
           {busy && !error && <div className="notice">{busy}</div>}

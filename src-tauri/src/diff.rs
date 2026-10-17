@@ -29,11 +29,11 @@ fn run_ok(program: &str, args: &[&str], ok: &[i32], hint: &str) -> Result<String
     Err(last.trim_start_matches("fatal: ").to_string())
 }
 
-fn run(program: &str, args: &[&str], hint: &str) -> Result<String, String> {
+pub(crate) fn run(program: &str, args: &[&str], hint: &str) -> Result<String, String> {
     run_ok(program, args, &[], hint)
 }
 
-fn installed(program: &str) -> bool {
+pub(crate) fn installed(program: &str) -> bool {
     Command::new(program).arg("-v").output().is_ok()
 }
 
@@ -51,16 +51,314 @@ fn safe_ref(r: &str) -> Result<&str, String> {
     Ok(r)
 }
 
-#[cfg(test)]
-fn unique_tmp(tag: &str) -> PathBuf {
+/// Which diff engines are usable here: git, and radiff2 + r2 for binaries.
+#[tauri::command]
+pub fn diff_tools() -> Value {
+    json!({ "git": installed("git"), "binary": installed("radiff2") && installed("r2"), "ipsw": installed("ipsw") })
+}
+
+// ── ipsw: dyld shared cache, firmware, cache diff (blacktop/ipsw) ─────────────
+//
+// ipsw turns Apple firmware into something diffable: it lists and extracts the dylibs inside a
+// dyld_shared_cache (the system frameworks aren't on disk otherwise), pulls a cache out of an IPSW/OTA, and can
+// download firmware by device and build. An extracted dylib is a plain Mach-O, so it's added as a file
+// artifact's version and diffed with radiff2 like any other binary. Big caches/firmware live in a shared
+// workspace (~/Difflicit/ipsw); only the small extracted dylibs are copied into a project.
+
+const IPSW_HINT: &str = "Install blacktop/ipsw (brew install ipsw) and try again.";
+
+fn home() -> PathBuf {
+    std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default()
+}
+
+/// A subfolder of Difflicit's shared ipsw workspace, created on demand.
+fn ipsw_dir(sub: &str) -> Result<PathBuf, String> {
+    let dir = home().join("Difflicit/ipsw").join(sub);
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir)
+}
+
+/// A fresh scratch directory for one extraction.
+pub(crate) fn scratch(tag: &str) -> PathBuf {
     let n = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
     std::env::temp_dir().join(format!("difflicit-{tag}-{}-{n}", std::process::id()))
 }
 
-/// Which diff engines are usable here: git, and radiff2 + r2 for binaries.
+/// Whether a file name is a primary dyld_shared_cache (not a subcache like `…arm64e.01` or a `.map`/`.symbols`).
+fn is_primary_cache(name: &str) -> bool {
+    name.strip_prefix("dyld_shared_cache_").is_some_and(|arch| !arch.is_empty() && !arch.contains('.'))
+}
+
+/// Add every primary dyld_shared_cache under `dir` (recursively) to `out` as { name, path }.
+fn collect_caches(dir: &Path, out: &mut Vec<Value>) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for path in entries.flatten().map(|e| e.path()) {
+        if path.is_dir() {
+            collect_caches(&path, out);
+        } else if path.file_name().and_then(|n| n.to_str()).is_some_and(is_primary_cache) {
+            out.push(json!({ "name": path.file_name().and_then(|n| n.to_str()), "path": path.to_string_lossy() }));
+        }
+    }
+}
+
+/// dyld_shared_caches on disk: this Mac's system cache, plus any Difflicit downloaded or extracted.
 #[tauri::command]
-pub fn diff_tools() -> Value {
-    json!({ "git": installed("git"), "binary": installed("radiff2") && installed("r2") })
+pub fn dsc_caches() -> Vec<Value> {
+    let mut out = vec![];
+    #[cfg(target_os = "macos")]
+    for (label, path) in [
+        ("This Mac", "/System/Volumes/Preboot/Cryptexes/OS/System/Library/dyld/dyld_shared_cache_arm64e"),
+        ("This Mac", "/System/Library/dyld/dyld_shared_cache_arm64e"),
+    ] {
+        if Path::new(path).exists() {
+            out.push(json!({ "name": label, "path": path }));
+            break; // the cryptex cache first; fall back to the old location only if it's absent
+        }
+    }
+    if let Ok(dir) = ipsw_dir("caches") {
+        collect_caches(&dir, &mut out);
+    }
+    out
+}
+
+/// The images (dylibs) in a dyld_shared_cache, each { name, version }, sorted by name.
+#[tauri::command]
+pub async fn dsc_images(cache: String) -> Result<Vec<Value>, String> {
+    let out = run("ipsw", &["dyld", "info", "--dylibs", "--json", &cache], IPSW_HINT)?;
+    let parsed: Value = serde_json::from_str(&out).map_err(|e| format!("Couldn't read ipsw output: {e}"))?;
+    let mut images: Vec<Value> = parsed
+        .get("dylibs")
+        .and_then(Value::as_array)
+        .map(|ds| ds.iter().map(|d| json!({ "name": d.get("name"), "version": d.get("version") })).collect())
+        .unwrap_or_default();
+    images.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
+    Ok(images)
+}
+
+/// Keep only filesystem-safe characters for a version id; fall back to `fallback` if nothing is left.
+fn safe_label(label: &str, fallback: &str) -> String {
+    let kept: String = label.chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') { c } else { '-' }).collect();
+    let trimmed = kept.trim_matches(['-', '.']).to_string();
+    if trimmed.is_empty() { fallback.to_string() } else { trimmed }
+}
+
+/// Extract one image from a cache into `outdir`; returns the Mach-O it produced.
+fn extract_image_to(cache: &str, image: &str, outdir: &Path) -> Result<PathBuf, String> {
+    safe_ref(image)?; // an image path never starts with '-'
+    std::fs::create_dir_all(outdir).map_err(|e| e.to_string())?;
+    let out = outdir.to_str().ok_or("bad path")?;
+    run("ipsw", &["dyld", "extract", cache, image, "-o", out, "--force"], IPSW_HINT)?;
+    let file = outdir.join(basename(image));
+    if file.is_file() {
+        return Ok(file);
+    }
+    std::fs::read_dir(outdir)
+        .ok()
+        .and_then(|rd| rd.flatten().map(|e| e.path()).find(|p| p.is_file()))
+        .ok_or_else(|| format!("ipsw extracted nothing for {image:?}."))
+}
+
+/// Add a dylib extracted from a dyld_shared_cache as a file artifact: a new one, or another version of the one
+/// already named after it. The version id is the image's version (e.g. the library version), so versions from
+/// different OS builds stay distinct.
+#[tauri::command]
+pub async fn add_dsc_artifact(project: String, cache: String, image: String, label: Option<String>) -> Result<Value, String> {
+    let dir = PathBuf::from(&project);
+    init_project_at(&dir)?;
+    let base = safe_name(basename(&image)).ok_or_else(|| format!("Couldn't name an artifact from {image:?}."))?;
+    let scratch = scratch("dsc");
+    let done = (|| {
+        let extracted = extract_image_to(&cache, &image, &scratch)?;
+        add_file(&dir, &base, &safe_label(label.as_deref().unwrap_or(""), &base), &extracted, Some(&image))
+    })();
+    let _ = std::fs::remove_dir_all(&scratch);
+    done
+}
+
+/// Add another version to a file artifact by extracting an image from (another) cache. Returns the version id.
+#[tauri::command]
+pub async fn add_dsc_version(project: String, artifact: String, cache: String, image: String, label: Option<String>) -> Result<String, String> {
+    let dir = PathBuf::from(&project);
+    let base = safe_name(basename(&image)).ok_or_else(|| format!("Couldn't name a version from {image:?}."))?;
+    let scratch = scratch("dsc");
+    let done = (|| {
+        let extracted = extract_image_to(&cache, &image, &scratch)?;
+        let mut body = read_project(&dir);
+        let version = add_version(&dir, &mut body, &artifact, &safe_label(label.as_deref().unwrap_or(""), &base), &extracted)?;
+        write_project(&dir, &body)?;
+        Ok(version)
+    })();
+    let _ = std::fs::remove_dir_all(&scratch);
+    done
+}
+
+/// Extract the dyld_shared_cache(s) from an IPSW/OTA file into the shared workspace. Returns the caches on disk.
+#[tauri::command]
+pub async fn extract_cache_from_ipsw(path: String) -> Result<Vec<Value>, String> {
+    let out = ipsw_dir("caches")?;
+    let outs = out.to_string_lossy().into_owned();
+    if !PathBuf::from(&path).is_file() {
+        return Err(format!("{path} doesn't exist."));
+    }
+    tauri::async_runtime::spawn_blocking(move || run("ipsw", &["extract", "--dyld", "-o", &outs, &path], IPSW_HINT))
+        .await
+        .map_err(|e| e.to_string())??;
+    let mut found = vec![];
+    collect_caches(&out, &mut found);
+    Ok(found)
+}
+
+/// Download firmware by device and build/version (via ipsw.me), extracting its dyld_shared_cache. Returns the
+/// caches now on disk. Downloads land in the shared workspace and can take a long time.
+#[tauri::command]
+pub async fn download_ipsw(device: String, build: Option<String>, version: Option<String>) -> Result<Vec<Value>, String> {
+    // A product type or board, e.g. iPhone15,2 or Mac18,5 — never a flag.
+    if !device.bytes().all(|b| b.is_ascii_alphanumeric() || b == b',') || !device.contains(',') {
+        return Err(format!("{device:?} isn't a device identifier (e.g. iPhone15,2 or Mac18,5)."));
+    }
+    let out = ipsw_dir("caches")?;
+    let mut args: Vec<String> =
+        ["download", "ipsw", "-y", "--dyld", "-o"].iter().map(|s| s.to_string()).collect();
+    args.push(out.to_string_lossy().into_owned());
+    args.push("--device".into());
+    args.push(device);
+    match (build.as_deref(), version.as_deref()) {
+        (Some(b), _) if !b.is_empty() => {
+            args.extend(["--build".into(), safe_label(b, "")]);
+        }
+        (_, Some(v)) if !v.is_empty() => {
+            args.extend(["--version".into(), safe_label(v, "")]);
+        }
+        _ => args.push("--latest".into()),
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        run("ipsw", &refs, IPSW_HINT)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    let mut found = vec![];
+    collect_caches(&out, &mut found);
+    Ok(found)
+}
+
+/// ipsw's own cache-level diff: the images added, removed and changed between two dyld_shared_caches.
+#[tauri::command]
+pub async fn dsc_diff(base: String, head: String) -> Result<Value, String> {
+    let out = run("ipsw", &["dyld", "info", "--dylibs", "--diff", "--json", &base, &head], IPSW_HINT)?;
+    serde_json::from_str(&out).map_err(|e| format!("Couldn't read ipsw output: {e}"))
+}
+
+/// A folder's immediate children, for the project file tree in the sidebar (expanded lazily, one level at a
+/// time). Folders first, then files, each alphabetical; dotfiles (.git, …) are hidden.
+#[tauri::command]
+pub fn list_dir(path: String) -> Result<Vec<Value>, String> {
+    let mut entries: Vec<Value> = std::fs::read_dir(&path)
+        .map_err(|e| format!("Couldn't read {path}: {e}"))?
+        .flatten()
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            if name.starts_with('.') {
+                return None;
+            }
+            let dir = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
+            Some(json!({ "name": name, "path": e.path().to_string_lossy(), "dir": dir }))
+        })
+        .collect();
+    entries.sort_by(|a, b| {
+        let (ad, bd) = (a["dir"].as_bool().unwrap_or(false), b["dir"].as_bool().unwrap_or(false));
+        bd.cmp(&ad).then_with(|| a["name"].as_str().cmp(&b["name"].as_str()))
+    });
+    Ok(entries)
+}
+
+// ── Installed binaries (a shortcut for picking a file artifact) ───────────────
+
+/// Native apps and on-disk libraries the user can pick as a file artifact without hunting through the
+/// filesystem. macOS apps are the usual /Applications bundles (the Mach-O inside each); libraries are the
+/// `.dylib`/`.so` files under common library directories. Everything is served by path, which the picker copies
+/// in as a version like any other file. (System frameworks in the dyld shared cache aren't on disk, so they
+/// don't appear here.)
+#[tauri::command]
+pub fn installed_binaries() -> Value {
+    json!({ "apps": installed_apps(), "libraries": installed_libraries() })
+}
+
+fn binary_entry(name: &str, path: &Path) -> Value {
+    json!({ "name": name, "path": path.to_string_lossy() })
+}
+
+fn sorted_unique(mut entries: Vec<Value>, limit: usize) -> Vec<Value> {
+    entries.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
+    entries.dedup_by(|a, b| a["name"] == b["name"]);
+    entries.truncate(limit);
+    entries
+}
+
+#[cfg(target_os = "macos")]
+fn installed_apps() -> Vec<Value> {
+    let mut dirs = vec![
+        PathBuf::from("/Applications"),
+        PathBuf::from("/Applications/Utilities"),
+        PathBuf::from("/System/Applications"),
+        PathBuf::from("/System/Applications/Utilities"),
+    ];
+    if let Some(home) = std::env::var_os("HOME") {
+        dirs.push(PathBuf::from(home).join("Applications"));
+    }
+    let mut out = vec![];
+    for dir in dirs {
+        let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+        for app in entries.flatten().map(|e| e.path()) {
+            if app.extension().and_then(|e| e.to_str()) != Some("app") {
+                continue;
+            }
+            if let Some((name, bin)) = app_binary(&app) {
+                out.push(binary_entry(&name, &bin));
+            }
+        }
+    }
+    sorted_unique(out, 300)
+}
+
+/// The Mach-O inside an .app bundle: Contents/MacOS/<app name>, else the first file there.
+#[cfg(target_os = "macos")]
+fn app_binary(app: &Path) -> Option<(String, PathBuf)> {
+    let name = app.file_stem()?.to_string_lossy().into_owned();
+    let macos = app.join("Contents/MacOS");
+    let preferred = macos.join(&name);
+    let bin = if preferred.is_file() {
+        preferred
+    } else {
+        std::fs::read_dir(&macos).ok()?.flatten().map(|e| e.path()).find(|p| p.is_file())?
+    };
+    Some((name, bin))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn installed_apps() -> Vec<Value> {
+    Vec::new()
+}
+
+fn installed_libraries() -> Vec<Value> {
+    #[cfg(target_os = "macos")]
+    let dirs: &[&str] = &["/opt/homebrew/lib", "/usr/local/lib", "/opt/local/lib"];
+    #[cfg(target_os = "linux")]
+    let dirs: &[&str] = &["/usr/lib", "/lib", "/usr/local/lib", "/usr/lib/x86_64-linux-gnu"];
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    let dirs: &[&str] = &[];
+
+    let mut out = vec![];
+    for dir in dirs {
+        let Ok(entries) = std::fs::read_dir(dir) else { continue };
+        for path in entries.flatten().map(|e| e.path()) {
+            let Some(name) = path.file_name().and_then(|n| n.to_str()) else { continue };
+            if path.is_file() && (name.ends_with(".dylib") || name.contains(".so")) {
+                out.push(binary_entry(name, &path));
+            }
+        }
+    }
+    sorted_unique(out, 400)
 }
 
 // ── git refs (a git artifact's versions) ─────────────────────────────────────
@@ -83,7 +381,7 @@ fn tags(repo: &Path) -> Result<Vec<String>, String> {
 
 /// A git artifact's versions: its tags, then recent commits.
 #[tauri::command]
-pub fn git_versions(project: String, repo: String) -> Result<Value, String> {
+pub async fn git_versions(project: String, repo: String) -> Result<Value, String> {
     let dir = PathBuf::from(&project).join(&repo);
     Ok(json!({ "tags": tags(&dir)?, "commits": log(&dir, 100)? }))
 }
@@ -108,7 +406,7 @@ fn basename(p: &str) -> &str {
 }
 
 /// A safe path segment: no separators, leading dots/dashes, or odd characters.
-fn safe_name(name: &str) -> Option<String> {
+pub(crate) fn safe_name(name: &str) -> Option<String> {
     let name = name.trim().trim_end_matches(".git");
     let ok = !name.is_empty() && !name.starts_with(['.', '-']) && name.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c));
     ok.then(|| name.to_string())
@@ -123,7 +421,8 @@ fn project_file(dir: &Path) -> PathBuf {
     if preferred.exists() { preferred } else { dir.join("analysis.json") }
 }
 
-fn read_project(dir: &Path) -> Value {
+/// A folder's project file (difflicit.json, else analysis.json), parsed; null if there is none.
+pub(crate) fn read_project(dir: &Path) -> Value {
     std::fs::read_to_string(project_file(dir))
         .ok()
         .and_then(|t| serde_json::from_str(&t).ok())
@@ -131,7 +430,7 @@ fn read_project(dir: &Path) -> Value {
 }
 
 /// Write the project file (always difflicit.json for projects this app manages).
-fn write_project(dir: &Path, body: &Value) -> Result<(), String> {
+pub(crate) fn write_project(dir: &Path, body: &Value) -> Result<(), String> {
     std::fs::write(dir.join("difflicit.json"), serde_json::to_string_pretty(body).unwrap() + "\n").map_err(|e| e.to_string())
 }
 
@@ -221,28 +520,57 @@ fn copy_dir(src: &Path, dest: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Add a file or folder as a new artifact (its first version). Returns { name, version }.
+/// Add a file or folder as an artifact: a new one, or another version of the file artifact already named after it.
+/// Returns { name, version }.
 #[tauri::command]
-pub fn add_file_artifact(project: String, path: String) -> Result<Value, String> {
+pub async fn add_file_artifact(project: String, path: String) -> Result<Value, String> {
     let dir = PathBuf::from(&project);
     init_project_at(&dir)?;
     let src = PathBuf::from(&path);
     if !src.exists() {
         return Err(format!("{path} doesn't exist."));
     }
-    let mut body = read_project(&dir);
     let base = safe_name(basename(&path)).ok_or_else(|| format!("Couldn't name an artifact from {path:?}."))?;
-    let name = unique_name(&body, &base);
-    let version = base.clone();
-    let rel = copy_in(&dir, &name, &version, &src)?;
-    append_artifact(&mut body, json!({ "name": name, "kind": "file", "versions": [{ "id": version, "path": rel }] }));
-    write_project(&dir, &body)?;
+    add_file(&dir, &base, &base, &src, None)
+}
+
+/// Copy `src` into the project under the file artifact `name`. The same name is the same thing in another version
+/// (that's what gets compared), so an existing file artifact gets a new version rather than a renamed twin;
+/// otherwise a new artifact starts (named apart from a git artifact that has the name). `image` records a
+/// dyld_shared_cache image the file came from. Returns { name, version }.
+fn add_file(dir: &Path, name: &str, version: &str, src: &Path, image: Option<&str>) -> Result<Value, String> {
+    let mut body = read_project(dir);
+    let grouped = artifacts_of(&body).iter().any(|a| artifact_name(a) == name && a.get("kind").and_then(Value::as_str) == Some("file"));
+    let (name, version) = if grouped {
+        (name.to_string(), add_version(dir, &mut body, name, version, src)?)
+    } else {
+        let name = unique_name(&body, name);
+        let rel = copy_in(dir, &name, version, src)?;
+        let mut artifact = json!({ "name": name, "kind": "file", "versions": [{ "id": version, "path": rel }] });
+        if let Some(image) = image {
+            artifact["image"] = json!(image);
+        }
+        append_artifact(&mut body, artifact);
+        (name, version.to_string())
+    };
+    write_project(dir, &body)?;
     Ok(json!({ "name": name, "version": version }))
+}
+
+/// Copy `src` in as another version of the file artifact `artifact` (in `body`, which the caller writes); returns
+/// its version id, `version` made unique.
+fn add_version(dir: &Path, body: &mut Value, artifact: &str, version: &str, src: &Path) -> Result<String, String> {
+    let arts = body.get_mut("artifacts").and_then(Value::as_array_mut).ok_or("no artifacts")?;
+    let a = arts.iter_mut().find(|a| artifact_name(a) == artifact).ok_or_else(|| format!("No artifact {artifact:?}."))?;
+    let version = unique_version(a, version);
+    let rel = copy_in(dir, artifact, &version, src)?;
+    a["versions"].as_array_mut().ok_or_else(|| format!("{artifact} isn't a file artifact."))?.push(json!({ "id": version, "path": rel }));
+    Ok(version)
 }
 
 /// Add another version (a file or folder) to an existing file artifact. Returns the version id.
 #[tauri::command]
-pub fn add_file_version(project: String, artifact: String, path: String) -> Result<String, String> {
+pub async fn add_file_version(project: String, artifact: String, path: String) -> Result<String, String> {
     let dir = PathBuf::from(&project);
     let src = PathBuf::from(&path);
     if !src.exists() {
@@ -250,24 +578,29 @@ pub fn add_file_version(project: String, artifact: String, path: String) -> Resu
     }
     let mut body = read_project(&dir);
     let base = safe_name(basename(&path)).ok_or_else(|| format!("Couldn't name a version from {path:?}."))?;
-    let arts = body.get_mut("artifacts").and_then(Value::as_array_mut).ok_or("no artifacts")?;
-    let a = arts.iter_mut().find(|a| artifact_name(a) == artifact).ok_or_else(|| format!("No artifact {artifact:?}."))?;
-    let versions = a.get("versions").and_then(Value::as_array).cloned().unwrap_or_default();
-    let taken: Vec<String> = versions.iter().filter_map(|v| v.get("id").and_then(Value::as_str).map(str::to_string)).collect();
-    let mut version = base.clone();
+    let version = add_version(&dir, &mut body, &artifact, &base, &src)?;
+    write_project(&dir, &body)?;
+    Ok(version)
+}
+
+/// Make `base` unique among an artifact's existing version ids.
+fn unique_version(artifact: &Value, base: &str) -> String {
+    let taken: Vec<String> = artifact
+        .get("versions")
+        .and_then(Value::as_array)
+        .map(|vs| vs.iter().filter_map(|v| v.get("id").and_then(Value::as_str).map(str::to_string)).collect())
+        .unwrap_or_default();
+    let mut version = base.to_string();
     for i in 2.. {
         if !taken.contains(&version) {
             break;
         }
         version = format!("{base}-{i}");
     }
-    let rel = copy_in(&dir, &artifact, &version, &src)?;
-    a["versions"].as_array_mut().unwrap().push(json!({ "id": version, "path": rel }));
-    write_project(&dir, &body)?;
-    Ok(version)
+    version
 }
 
-fn init_project_at(dir: &Path) -> Result<(), String> {
+pub(crate) fn init_project_at(dir: &Path) -> Result<(), String> {
     if !read_project(dir).is_object() {
         let name = dir.file_name().and_then(|n| n.to_str()).unwrap_or("project");
         write_project(dir, &json!({ "$schema": ANALYSIS_SCHEMA, "project": name }))?;
@@ -300,8 +633,11 @@ fn version_path(dir: &Path, artifact: &Value, id: &str) -> Result<PathBuf, Strin
         .ok_or_else(|| format!("No version {id:?}."))
 }
 
-fn is_binary_file(path: &Path) -> bool {
-    path.is_file() && std::fs::read(path).ok().map(|b| b[..b.len().min(8192)].contains(&0)).unwrap_or(false)
+/// Whether a file is binary: a NUL byte in its first 8 KiB (only that much is read, however big the file).
+pub(crate) fn is_binary_file(path: &Path) -> bool {
+    use std::io::Read;
+    let mut head = Vec::with_capacity(8192);
+    std::fs::File::open(path).and_then(|f| f.take(8192).read_to_end(&mut head)).is_ok() && head.contains(&0)
 }
 
 fn no_index(a: &Path, b: &Path) -> Result<String, String> {
@@ -313,17 +649,28 @@ fn no_index(a: &Path, b: &Path) -> Result<String, String> {
     )
 }
 
-/// The diff between two versions (`base`, `head`) of an artifact, as unified-diff text or a binary function table.
+/// The files to compare: `base` of `base_artifact` (or of `artifact`) and `head` of `artifact`. Two versions of one
+/// artifact, or versions of two different file artifacts (two builds added separately, say).
+fn pair_paths(dir: &Path, artifact: &Value, base_artifact: Option<&Value>, base: &str, head: &str) -> Result<(PathBuf, PathBuf), String> {
+    let from = base_artifact.unwrap_or(artifact);
+    if from != artifact && [from, artifact].iter().any(|a| a.get("kind").and_then(Value::as_str) == Some("git")) {
+        return Err("A git repository can only be compared with its own versions: pick two versions of the same repository.".into());
+    }
+    Ok((version_path(dir, from, base)?, version_path(dir, artifact, head)?))
+}
+
+/// The diff between two versions (`base`, `head`) of an artifact — or `base` of another artifact (`base_artifact`)
+/// — as unified-diff text or a binary function table.
 #[tauri::command]
-pub fn artifact_diff(project: String, artifact: Value, base: String, head: String) -> Result<Value, String> {
+pub async fn artifact_diff(project: String, artifact: Value, base: String, head: String, base_artifact: Option<Value>) -> Result<Value, String> {
     let dir = PathBuf::from(&project);
-    if artifact.get("kind").and_then(Value::as_str) == Some("git") {
+    let same = base_artifact.as_ref().is_none_or(|b| b == &artifact);
+    if same && artifact.get("kind").and_then(Value::as_str) == Some("git") {
         let repo = resolve(&dir, artifact.get("repo").and_then(Value::as_str).unwrap_or(""));
         let text = git(&repo, &["diff", "--no-color", safe_ref(&base)?, safe_ref(&head)?, "--"])?;
         return Ok(json!({ "kind": "unified", "text": text }));
     }
-    let b = version_path(&dir, &artifact, &base)?;
-    let h = version_path(&dir, &artifact, &head)?;
+    let (b, h) = pair_paths(&dir, &artifact, base_artifact.as_ref(), &base, &head)?;
     if is_binary_file(&b) && is_binary_file(&h) {
         return Ok(json!({ "kind": "binary", "functions": radiff(&b, &h)? }));
     }
@@ -337,6 +684,10 @@ const RADARE_HINT: &str = "Install radare2 (radiff2 and r2) for binary diffing."
 fn radiff(base: &Path, head: &Path) -> Result<Vec<Value>, String> {
     let (b, h) = (base.to_str().ok_or("bad path")?, head.to_str().ok_or("bad path")?);
     let out = run("radiff2", &["-A", "-C", "-j", b, h], RADARE_HINT)?;
+    // No functions to compare (e.g. a stub dylib with an empty __text): radiff2 prints nothing at all.
+    if out.trim().is_empty() {
+        return Ok(Vec::new());
+    }
     let rows: Vec<Value> = serde_json::from_str(out.trim()).map_err(|e| format!("radiff2 gave unexpected output: {e}"))?;
     Ok(rows
         .iter()
@@ -390,10 +741,19 @@ fn disasm(binary: &Path, addr: &str) -> Result<String, String> {
 
 /// A unified diff of one function's normalized disassembly between two binary versions of an artifact.
 #[tauri::command]
-pub fn artifact_function_diff(project: String, artifact: Value, base: String, head: String, name: String, base_addr: Option<String>, head_addr: Option<String>) -> Result<String, String> {
+#[allow(clippy::too_many_arguments)] // one Tauri command's arguments, named as the web app sends them
+pub async fn artifact_function_diff(
+    project: String,
+    artifact: Value,
+    base: String,
+    head: String,
+    name: String,
+    base_addr: Option<String>,
+    head_addr: Option<String>,
+    base_artifact: Option<Value>,
+) -> Result<String, String> {
     let dir = PathBuf::from(&project);
-    let b = version_path(&dir, &artifact, &base)?;
-    let h = version_path(&dir, &artifact, &head)?;
+    let (b, h) = pair_paths(&dir, &artifact, base_artifact.as_ref(), &base, &head)?;
     let before = base_addr.as_deref().map(|a| disasm(&b, a)).transpose()?.unwrap_or_default();
     let after = head_addr.as_deref().map(|a| disasm(&h, a)).transpose()?.unwrap_or_default();
     let path = name.replace(['\n', ' '], "_");
@@ -418,26 +778,55 @@ mod tests {
     }
 
     #[test]
+    fn ipsw_helpers() {
+        assert!(is_primary_cache("dyld_shared_cache_arm64e"));
+        assert!(!is_primary_cache("dyld_shared_cache_arm64e.01.dylddata"));
+        assert!(!is_primary_cache("dyld_shared_cache_arm64e.symbols"));
+        assert!(!is_primary_cache("something_else"));
+        assert_eq!(safe_label("951.7.0.0.0", "x"), "951.7.0.0.0");
+        assert_eq!(safe_label("iOS 18.1 (22B83)", "x"), "iOS-18.1--22B83");
+        assert_eq!(safe_label("///", "fallback"), "fallback");
+    }
+
+    #[test]
     fn file_artifact_and_diff() {
-        let dir = unique_tmp("proj");
+        let dir = scratch("proj");
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.to_string_lossy().to_string();
         init_project(p.clone()).unwrap();
 
-        let a = unique_tmp("v").with_extension("txt");
+        let a = scratch("v").with_extension("txt");
         std::fs::write(&a, "one\ntwo\n").unwrap();
-        let added = add_file_artifact(p.clone(), a.to_string_lossy().into()).unwrap();
+        let added = tauri::async_runtime::block_on(add_file_artifact(p.clone(), a.to_string_lossy().into())).unwrap();
         let name = added["name"].as_str().unwrap().to_string();
         let v1 = added["version"].as_str().unwrap().to_string();
 
         let b = dir.join("newer.txt");
         std::fs::write(&b, "one\ntwo\nthree\n").unwrap();
-        let v2 = add_file_version(p.clone(), name.clone(), b.to_string_lossy().into()).unwrap();
+        let v2 = tauri::async_runtime::block_on(add_file_version(p.clone(), name.clone(), b.to_string_lossy().into())).unwrap();
+
+        // The same file added again is another version of its artifact, not a second artifact.
+        let again = tauri::async_runtime::block_on(add_file_artifact(p.clone(), a.to_string_lossy().into())).unwrap();
+        assert_eq!(again["name"].as_str(), Some(name.as_str()));
+        assert_eq!(read_project(&dir)["artifacts"].as_array().unwrap().len(), 1);
+        assert_eq!(read_project(&dir)["artifacts"][0]["versions"].as_array().unwrap().len(), 3);
 
         let artifact = read_project(&dir)["artifacts"][0].clone();
-        let out = artifact_diff(p, artifact, v1, v2).unwrap();
+        let out = tauri::async_runtime::block_on(artifact_diff(p.clone(), artifact.clone(), v1.clone(), v2.clone(), None)).unwrap();
         assert_eq!(out["kind"], "unified");
         assert!(out["text"].as_str().unwrap().contains("+three"));
+
+        // Across artifacts: v1 of the first against another file artifact's version.
+        let c = dir.join("other.txt");
+        std::fs::write(&c, "one\nfour\n").unwrap();
+        let other = tauri::async_runtime::block_on(add_file_artifact(p.clone(), c.to_string_lossy().into())).unwrap();
+        let arts = read_project(&dir)["artifacts"].clone();
+        let other_version = other["version"].as_str().unwrap().to_string();
+        let across = tauri::async_runtime::block_on(artifact_diff(p.clone(), arts[1].clone(), v1.clone(), other_version, Some(arts[0].clone()))).unwrap();
+        assert!(across["text"].as_str().unwrap().contains("+four"));
+        // A git repository against another artifact is refused, not guessed at.
+        let git_like = json!({ "name": "g", "kind": "git", "repo": "artifacts/g" });
+        assert!(pair_paths(&dir, &git_like, Some(&arts[0]), &v1, "HEAD").is_err());
         std::fs::remove_dir_all(&dir).unwrap();
         let _ = std::fs::remove_file(&a);
     }

@@ -10,6 +10,9 @@
 //! plugin passes them to the web app, which asks before calling `analyze_locally`.
 
 mod diff;
+mod info;
+mod oauth;
+mod vnc;
 
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
@@ -28,19 +31,9 @@ fn workspace(app: &AppHandle, owner: &str, name: &str) -> Result<PathBuf, String
     Ok(home(app)?.join(owner).join(name))
 }
 
-/// A folder's Difflicit project file (difflicit.json or analysis.json), parsed; null if it isn't a project.
-fn project_file(dir: &Path) -> Value {
-    for name in ["difflicit.json", "analysis.json"] {
-        if let Some(v) = std::fs::read_to_string(dir.join(name)).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()) {
-            return v;
-        }
-    }
-    Value::Null
-}
-
 /// The project id of a Difflicit project folder: its project file's `project`, else the folder name.
 fn analysis_of(dir: &Path) -> Option<String> {
-    let file = project_file(dir);
+    let file = diff::read_project(dir);
     if !file.is_object() {
         return None;
     }
@@ -53,7 +46,7 @@ fn analysis_of(dir: &Path) -> Option<String> {
 
 /// A project file field (e.g. artifacts), or null.
 fn analysis_field(dir: &Path, key: &str) -> Value {
-    project_file(dir).get(key).cloned().unwrap_or(Value::Null)
+    diff::read_project(dir).get(key).cloned().unwrap_or(Value::Null)
 }
 
 fn subdirs(dir: &Path) -> Vec<PathBuf> {
@@ -117,24 +110,15 @@ fn patch_files(dir: &Path, rel: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// An analysis folder as the app shows it: the project its analysis.json names (null without one), the
-/// README rendered to HTML (sanitized by the app), and the text of each patch, like the GitHub version.
+/// A project folder as the app shows it: the project its project file names (null without one), its notes
+/// rendered to HTML (sanitized by the app) with their path, and the text of each patch, like the GitHub version.
 #[tauri::command]
-fn local_analysis(path: String) -> Result<Value, String> {
+async fn local_analysis(path: String) -> Result<Value, String> {
     let dir = PathBuf::from(&path);
     if !dir.is_dir() {
         return Err(format!("{path} isn't a folder (anymore)."));
     }
-    let readme = std::fs::read_dir(&dir)
-        .map_err(|e| e.to_string())?
-        .flatten()
-        .find(|e| e.file_name().to_string_lossy().eq_ignore_ascii_case("README.md"))
-        .and_then(|e| std::fs::read_to_string(e.path()).ok())
-        .map(|markdown| {
-            let mut html = String::new();
-            pulldown_cmark::html::push_html(&mut html, pulldown_cmark::Parser::new_ext(&markdown, pulldown_cmark::Options::all()));
-            html
-        });
+    let (notes_path, notes_html) = info::notes(&dir);
     let mut found = Vec::new();
     patch_files(&dir, Path::new(""), &mut found);
     let patches: Vec<Value> = found
@@ -148,7 +132,8 @@ fn local_analysis(path: String) -> Result<Value, String> {
     Ok(json!({
         "project": analysis_of(&dir),
         "artifacts": analysis_field(&dir, "artifacts"),
-        "readme_html": readme,
+        "notes_path": notes_path,
+        "notes_html": notes_html,
         "patches": patches,
     }))
 }
@@ -222,6 +207,9 @@ pub fn run() {
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        // Sign In with ivx: iam's GitHub proxy only allows the website's origin (CORS), so the desktop app calls
+        // it natively through this plugin, which isn't subject to CORS (see src/iam/session.ts).
+        .plugin(tauri_plugin_http::init())
         .setup(|_app| {
             // Installers register difflicit:// on Windows and Linux; this covers `tauri dev` and AppImages.
             // (macOS only knows the scheme from an installed app bundle.)
@@ -244,7 +232,22 @@ pub fn run() {
             diff::artifact_diff,
             diff::artifact_function_diff,
             diff::diff_tools,
+            diff::installed_binaries,
+            diff::list_dir,
+            diff::dsc_caches,
+            diff::dsc_images,
+            diff::add_dsc_artifact,
+            diff::add_dsc_version,
+            diff::extract_cache_from_ipsw,
+            diff::download_ipsw,
+            diff::dsc_diff,
+            info::file_info,
+            info::create_note,
+            info::write_note,
+            info::render_markdown,
             diff::is_github,
+            vnc::vnc_connect,
+            oauth::oauth_callback,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Difflicit");
@@ -296,10 +299,10 @@ mod tests {
         std::fs::write(dir.join("patches/fix.diff"), "--- a/x\n+++ b/x\n").unwrap();
         std::fs::write(dir.join(".git/ignored.diff"), "").unwrap();
 
-        let a = local_analysis(path.clone()).unwrap();
+        let a = tauri::async_runtime::block_on(local_analysis(path.clone())).unwrap();
         assert!(a["project"].is_null()); // no marker yet
-        assert!(a["readme_html"].as_str().unwrap().contains("<h1>Root cause</h1>"));
-        assert!(a["readme_html"].as_str().unwrap().contains("<table>"));
+        assert!(a["notes_html"].as_str().unwrap().contains("<h1>Root cause</h1>"));
+        assert!(a["notes_html"].as_str().unwrap().contains("<table>"));
         assert_eq!(a["patches"].as_array().unwrap().len(), 1);
         assert_eq!(a["patches"][0]["path"], "patches/fix.diff");
 

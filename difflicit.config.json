@@ -6,5 +6,23 @@
     "owner": "ivxlabs",
     "id": "CVE-\\d{4}-\\d{4,}",
     "repo": "{id}"
-  }
+  },
+  "iam": {
+    "supabaseUrl": "https://axmtlkeiqcdzyittpgho.supabase.co",
+    "clientId": "51b71227-0d86-4cf8-9fe9-6f44d3764281",
+    "url": "https://iam.ivx.run"
+  },
+  "sponsor": "https://github.com/sponsors/0xcrypto",
+  "partners": [
+    {
+      "name": "ivx/ai Chat",
+      "description": "A private chat client for AI models — no backend, accounts or telemetry.",
+      "url": "https://ai.ivx.run"
+    },
+    {
+      "name": "Disclosure",
+      "description": "Federated, end-to-end-encrypted vulnerability disclosure.",
+      "url": "https://ivx.run/disclosure/"
+    }
+  ]
 }

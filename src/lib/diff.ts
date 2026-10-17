@@ -6,6 +6,8 @@ export interface DiffLine {
   text: string;
   oldNo?: number;
   newNo?: number;
+  /** A changed line's counterpart: the added line that replaced this deleted one, or the other way round. */
+  peer?: DiffLine;
 }
 
 export interface DiffFile {
@@ -113,7 +115,43 @@ export function parseUnifiedDiff(text: string): DiffFile[] {
 export function diffLines(file: DiffFile): DiffLine[] {
   const out: DiffLine[] = [];
   walk(file.text.split("\n"), (line) => out.push(line));
+  // A run of deletions followed by additions: the n-th of each are the same line, before and after (as the split
+  // view pairs them).
+  for (let i = 0; i < out.length; ) {
+    let d = i;
+    while (d < out.length && out[d].type === "del") d++;
+    let a = d;
+    while (a < out.length && out[a].type === "add") a++;
+    for (let k = 0; k < Math.min(d - i, a - d); k++) {
+      out[i + k].peer = out[d + k];
+      out[d + k].peer = out[i + k];
+    }
+    i = Math.max(a, i + 1);
+  }
   return out;
+}
+
+const isSpace = (c: string | undefined) => c === undefined || /\s/.test(c);
+
+/**
+ * The part of a changed line that differs from its peer, as [start, end), widened to whole tokens (so `<` → `<=`
+ * marks both operators, not just `=`); null when it has no peer, nothing but whitespace in common with it, or
+ * no difference.
+ */
+export function changedPart(line: DiffLine): [number, number] | null {
+  const a = line.text;
+  const b = line.peer?.text;
+  if (b === undefined) return null;
+  let start = 0;
+  while (start < a.length && start < b.length && a[start] === b[start]) start++;
+  let end = 0;
+  while (end < a.length - start && end < b.length - start && a[a.length - 1 - end] === b[b.length - 1 - end]) end++;
+  // Back to the start of the token the difference is in, on both sides, and on to its end.
+  while (start > 0 && !isSpace(a[start - 1]) && (!isSpace(a[start]) || !isSpace(b[start]))) start--;
+  while (end > 0 && !isSpace(a[a.length - end]) && (!isSpace(a[a.length - 1 - end]) || !isSpace(b[b.length - 1 - end]))) end--;
+  // Lines with only indentation in common were rewritten, not edited: there's no part to point at.
+  if (start >= a.length - end || !(a.slice(0, start) + a.slice(a.length - end)).trim()) return null;
+  return [start, a.length - end];
 }
 
 export interface SplitRow {

@@ -1,27 +1,32 @@
 // SPDX-License-Identifier: GPL-3.0-only
 import { useEffect, useState } from "react";
-import { AlertIcon, DiffIcon } from "@primer/octicons-react";
+import { AlertIcon, DiffIcon, FileDirectoryIcon, HeartIcon } from "@primer/octicons-react";
 import type { Index, Repo, Location } from "./types";
 import { loadIndex, loadProject, localFolders, reloadCatalog, useCatalogVersion } from "./api";
-import { INSTANCE, PRODUCT, PROJECTS, docsUrl } from "./config";
-import { connectGitHub } from "./iam/session";
+import { INSTANCE, PARTNERS, PRODUCT, PROJECTS, SPONSOR, TAGLINE, docsUrl } from "./config";
+import { connectGitHub, onSignInError } from "./iam/session";
 import { CONNECT_LABEL, useSignedIn } from "./lib/access";
 import { hasCommand, keyLabel, runCommand, useCommand } from "./lib/commands";
-import { defaultPair, locationId, versionOptions } from "./lib/analysis";
-import { DOWNLOAD_URL, IS_DESKTOP, addFileVersion, gitVersions, initProject, localAnalysis, onAnalyzeLink, openExternal, pickFile, pickFolder, rememberFolder, revealFolder } from "./lib/desktop";
+import { defaultPair, loadAnalysis, locationId, versionOptions } from "./lib/analysis";
+import { DOWNLOAD_URL, IS_DESKTOP, addFileVersion, createNote, gitVersions, initProject, localAnalysis, onAnalyzeLink, openExternal, pickFile, pickFolder, rememberFolder, revealFolder, setWindowTitle } from "./lib/desktop";
 import { AddArtifact } from "./components/AddArtifact";
+import { AddCacheVersion } from "./components/AddCacheVersion";
 import { analysisRepos, myAnalysisRepos, viewer as loadViewer } from "./lib/github";
 import { projectOfRepo, repoName, sameId } from "./lib/projects";
+import { analyzeChange, reportName, reportNote } from "./lib/report";
 import { urlFor, useRoute } from "./lib/route";
 import { uniqueBy, useAsync } from "./lib/util";
 import { Analysis } from "./components/Analysis";
 import { AnalyzeButton } from "./components/AnalyzeButton";
+import { AnalyzeDialog } from "./components/AnalyzeDialog";
 import { BlankSlate, DocsLink, Spinner } from "./components/BlankSlate";
 import { AnalyzeLocally, OpenInDesktop } from "./components/LocalAnalysis";
 import { CommandPalette, SearchPick, type Command } from "./components/Palettes";
 import { StarButton } from "./components/StarButton";
 import { TokenDialog } from "./components/TokenDialog";
 import { Toolbar } from "./components/Toolbar";
+import { VncViewer } from "./components/VncViewer";
+import type { Sandbox } from "./lib/sandbox";
 
 export function App({ signInError }: { signInError: string | null }) {
   const [route, navigate] = useRoute();
@@ -36,6 +41,8 @@ export function App({ signInError }: { signInError: string | null }) {
   const [pick, setPick] = useState<"search" | "palette" | null>(null);
   // A folder the user opened that has no analysis.json yet: ask which project it analyzes.
   const [addingArtifact, setAddingArtifact] = useState(false);
+  const [cacheVersionFor, setCacheVersionFor] = useState<string | null>(null);
+  const [sandbox, setSandbox] = useState<Sandbox | null>(null);
 
   const [index, indexError] = useAsync(loadIndex, [useCatalogVersion()]);
   const [project, projectError] = useAsync(() => (route.project ? loadProject(route.project) : null), [route.project]);
@@ -60,6 +67,11 @@ export function App({ signInError }: { signInError: string | null }) {
     });
   }, [navigate]);
 
+  // Desktop: a sign-in that failed in the browser (or never came back) says so here.
+  useEffect(() => {
+    if (IS_DESKTOP && __IAM__) onSignInError((message) => setBanner(`Sign-in failed: ${message}`));
+  }, []);
+
   // ⌘K searches the open analysis, ⌘P runs a command, ⌘O opens a project (Ctrl elsewhere). Pressing it again closes.
   useEffect(() => {
     if (route.embed) return;
@@ -81,8 +93,12 @@ export function App({ signInError }: { signInError: string | null }) {
   }, [route.embed]);
 
   useEffect(() => {
+    // The desktop app is Difflicit itself, not any one instance; the website carries the instance's name.
     const site = IS_DESKTOP ? PRODUCT : INSTANCE.name;
-    document.title = route.project ? `${route.project} · ${site}` : IS_DESKTOP ? PRODUCT : `${site} · ${PRODUCT}`;
+    const title = route.project ? `${route.project} · ${site}` : IS_DESKTOP ? PRODUCT : `${site} · ${PRODUCT}`;
+    document.title = title;
+    // Set the native window title directly: it doesn't track document.title on every platform.
+    if (IS_DESKTOP) setWindowTitle(title);
   }, [route.project]);
 
   // A fresh fork can take a moment to show up in GitHub's fork list; keep it locally meanwhile.
@@ -114,9 +130,15 @@ export function App({ signInError }: { signInError: string | null }) {
     [location?.kind === "local" ? location.path : null, artifact?.kind === "git" ? artifact.repo : null, useCatalogVersion()],
   );
   const versions = artifact ? versionOptions(artifact, gitRefs) : [];
+  // Comparing two artifacts (Analyze): the base version is another (file) artifact's.
+  const baseArtifact = artifacts.find((a) => a.name === route.baseArtifact && a.name !== artifact?.name);
+  const baseVersions = baseArtifact ? versionOptions(baseArtifact) : versions;
   const fallbackPair = defaultPair(versions);
-  const base = route.base ?? fallbackPair.base;
+  const base = route.base ?? (baseArtifact ? baseVersions[0]?.id : fallbackPair.base);
   const head = route.head ?? fallbackPair.head;
+  // Analyze (desktop, in a project folder): pick the two things to compare; it writes them up as a note.
+  const [picking, setPicking] = useState(false);
+  useCommand("analyze", () => setPicking(true), location?.kind === "local");
   const connect = __IAM__ ? connectGitHub : () => setAccountOpen(true);
 
   /** Analyze: show the user's repo here and analyze it locally, in the desktop app. */
@@ -167,7 +189,8 @@ export function App({ signInError }: { signInError: string | null }) {
       { label: "Open folder as a project…", run: openFolder, when: IS_DESKTOP },
       { label: "Search this analysis…", hint: keyLabel("k"), run: () => setPick("search"), when: Boolean(location) },
       { label: "Analyze", run: () => runCommand("analyze"), when: hasCommand("analyze") },
-      { label: "Show the write-up", run: () => navigate({ file: null }), when: Boolean(location && route.file) },
+      { label: "Get a copy", run: () => runCommand("get-copy"), when: hasCommand("get-copy") },
+      { label: "Show the notes", run: () => navigate({ file: null }), when: Boolean(location && route.file) },
       { label: "Switch repository…", run: () => runCommand("repositories"), when: hasCommand("repositories") },
       { label: "Unified diff", run: () => runCommand("diff-unified"), when: hasCommand("diff-unified") },
       { label: "Split diff", run: () => runCommand("diff-split"), when: hasCommand("diff-split") },
@@ -223,13 +246,17 @@ export function App({ signInError }: { signInError: string | null }) {
         repo={repo}
         artifacts={artifacts}
         artifact={artifact}
+        baseArtifact={baseArtifact}
         versions={versions}
+        baseVersions={baseVersions}
         base={base}
         head={head}
         onArtifact={(name) => navigate({ artifact: name })}
         onPair={(b, h) => navigate({ base: b, head: h })}
         onAddArtifact={() => setAddingArtifact(true)}
         onAddVersion={addVersion}
+        onAddCacheVersion={setCacheVersionFor}
+        onConnectSandbox={setSandbox}
         upstream={upstream}
         file={route.file}
         viewer={viewer}
@@ -247,7 +274,11 @@ export function App({ signInError }: { signInError: string | null }) {
           <p>{indexError}</p>
         </BlankSlate>
       ) : !route.project ? (
-        <Welcome index={index} />
+        <Welcome
+          index={index}
+          onOpen={(id) => navigate({ project: id, repo: null, file: null })}
+          onOpenFolder={IS_DESKTOP ? openFolder : undefined}
+        />
       ) : projectError ? (
         <BlankSlate icon={<DiffIcon size={48} className="big-icon" />} title={`${route.project} isn't tracked`}>
           <p>It isn't in this catalog.</p>
@@ -266,9 +297,30 @@ export function App({ signInError }: { signInError: string | null }) {
           file={route.file}
           line={route.line}
           onFile={(file) => navigate({ file })}
+          path={route.path}
+          onPath={(path) => navigate({ path })}
+          onArtifact={(name) => navigate({ artifact: name })}
           onAddArtifact={() => setAddingArtifact(true)}
+          baseArtifact={baseArtifact?.name}
           action={
-            <AnalyzeButton project={project} repos={repos} upstream={upstream} viewer={viewer} onConnect={connect} onOpen={openRepo} />
+            <>
+              {/* A published analysis: get your own copy (on GitHub, then in the desktop app). A project folder:
+                  analyze a change in it, into a note there. */}
+              {location?.kind === "local" ? (
+                <button
+                  className="btn primary analyze"
+                  onClick={(e) => {
+                    e.stopPropagation(); // it sits in the project header, which toggles on click
+                    setPicking(true);
+                  }}
+                  title="Compare two versions and write up what the change was about"
+                >
+                  Analyze
+                </button>
+              ) : (
+                <AnalyzeButton project={project} repos={repos} upstream={upstream} viewer={viewer} onConnect={connect} onOpen={openRepo} />
+              )}
+            </>
           }
         />
       )}
@@ -291,6 +343,40 @@ export function App({ signInError }: { signInError: string | null }) {
           onClose={() => setAddingArtifact(false)}
         />
       )}
+      {cacheVersionFor && location?.kind === "local" && (
+        <AddCacheVersion
+          project={location.path}
+          artifact={cacheVersionFor}
+          onDone={(version) => {
+            const name = cacheVersionFor;
+            setCacheVersionFor(null);
+            reloadCatalog();
+            navigate({ artifact: name, head: version });
+          }}
+          onClose={() => setCacheVersionFor(null)}
+        />
+      )}
+      {sandbox && <VncViewer sandbox={sandbox} onClose={() => setSandbox(null)} />}
+      {picking && location?.kind === "local" && (
+        <AnalyzeDialog
+          project={location.path}
+          artifacts={artifacts}
+          initial={{
+            before: { artifact: baseArtifact?.name ?? artifact?.name ?? "", version: base ?? "" },
+            after: { artifact: artifact?.name ?? "", version: head ?? "" },
+          }}
+          onClose={() => setPicking(false)}
+          onAnalyze={async (before, after) => {
+            // Diff the pair, predict what it was about, and write that up as a note, then show the note.
+            const baseArtifact = before.artifact === after.artifact ? null : before.artifact;
+            const content = await loadAnalysis(location, after.artifact, before.version, after.version, baseArtifact);
+            const note = await createNote(location.path, reportName(content), reportNote(content, await analyzeChange(content)));
+            setPicking(false);
+            reloadCatalog();
+            navigate({ artifact: after.artifact, baseArtifact, base: before.version, head: after.version, path: note });
+          }}
+        />
+      )}
       {handoff && route.project && <OpenInDesktop project={route.project} repo={handoff} onClose={() => setHandoff(null)} />}
       {local && (
         <AnalyzeLocally
@@ -305,24 +391,72 @@ export function App({ signInError }: { signInError: string | null }) {
   );
 }
 
-function Welcome({ index }: { index: Index | null }) {
+function Welcome({ index, onOpen, onOpenFolder }: { index: Index | null; onOpen: (id: string) => void; onOpenFolder?: () => void }) {
+  // The desktop app (and any catalog-less build) lists the user's own projects inline; use them as "recent".
+  const recent = index?.projects;
   return (
-    <BlankSlate icon={<img src={`${import.meta.env.BASE_URL}favicon.svg`} alt="" width={64} height={64} />} title={index?.title ?? PRODUCT}>
-      {index && <p>{index.about}</p>}
-      {index && (
-        <div className="stats">
-          {index.stats.map((stat) => (
-            <div key={stat.label}>
-              <b>{stat.value.toLocaleString()}</b>
-              <span className="muted">{stat.label}</span>
+    <div className="welcome">
+      <img className="welcome-logo" src={`${import.meta.env.BASE_URL}favicon.svg`} alt="" width={72} height={72} />
+      <h2>{recent ? PRODUCT : (index?.title ?? PRODUCT)}</h2>
+      <p className="welcome-tagline muted">{TAGLINE}</p>
+
+      {recent ? (
+        recent.length ? (
+          <div className="welcome-recent">
+            {recent.slice(0, 8).map((p) => (
+              <button key={p.id} className="welcome-project" onClick={() => onOpen(p.id)}>
+                <span className="title mono">{p.id}</span>
+                {p.summary && <span className="sub muted">{p.summary}</span>}
+              </button>
+            ))}
+          </div>
+        ) : (
+          <p className="muted">No projects yet. Open a folder to start, or press {keyLabel("o")}.</p>
+        )
+      ) : (
+        <>
+          {index && <p>{index.about}</p>}
+          {index && (
+            <div className="stats">
+              {index.stats.map((stat) => (
+                <div key={stat.label}>
+                  <b>{stat.value.toLocaleString()}</b>
+                  <span className="muted">{stat.label}</span>
+                </div>
+              ))}
             </div>
+          )}
+          <p className="muted">
+            <kbd>{keyLabel("o")}</kbd> opens a project, <kbd>{keyLabel("p")}</kbd> runs a command. <DocsLink />
+          </p>
+        </>
+      )}
+
+      <div className="welcome-actions">
+        {onOpenFolder && (
+          <button className="btn" onClick={onOpenFolder}>
+            <FileDirectoryIcon size={16} /> Open folder
+          </button>
+        )}
+        <StarButton variant="button" />
+        {SPONSOR && (
+          <a className="btn" href={SPONSOR} target="_blank" rel="noreferrer">
+            <HeartIcon size={16} /> Sponsor
+          </a>
+        )}
+      </div>
+
+      {PARTNERS.length > 0 && (
+        <div className="partners">
+          <div className="partners-head muted">More from ivx</div>
+          {PARTNERS.map((p) => (
+            <a key={p.url} className="partner" href={p.url} target="_blank" rel="noreferrer">
+              <span className="partner-name">{p.name}</span>
+              <span className="partner-desc muted">{p.description}</span>
+            </a>
           ))}
         </div>
       )}
-      <p>
-        <kbd>{keyLabel("o")}</kbd> opens a project, <kbd>{keyLabel("p")}</kbd> runs a command. <DocsLink />
-      </p>
-      <StarButton variant="button" />
-    </BlankSlate>
+    </div>
   );
 }

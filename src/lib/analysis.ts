@@ -3,7 +3,7 @@
 // This resolves a location + a chosen (artifact, base, head) into the diff to show. Stored *.diff / *.patch
 // files (a project with no artifacts) still work, on the web too; the artifact engines run on the desktop.
 
-import { githubArtifacts, repoContent } from "./github";
+import { repoContent } from "./github";
 import { artifactDiff, localAnalysis } from "./desktop";
 import { parseUnifiedDiff } from "./diff";
 import type { AnalysisContent, Artifact, Location, Repo } from "../types";
@@ -35,26 +35,41 @@ export function defaultPair(options: VersionOption[]): { base?: string; head?: s
   return { head: options[0].id, base: (options[1] ?? options[0]).id };
 }
 
-export async function loadAnalysis(loc: Location, artifactName?: string | null, base?: string | null, head?: string | null): Promise<AnalysisContent> {
-  return loc.kind === "local" ? loadLocal(loc.path, artifactName, base, head) : loadGithub(loc.repo);
+export async function loadAnalysis(
+  loc: Location,
+  artifactName?: string | null,
+  base?: string | null,
+  head?: string | null,
+  baseArtifactName?: string | null,
+): Promise<AnalysisContent> {
+  return loc.kind === "local" ? loadLocal(loc.path, artifactName, base, head, baseArtifactName) : loadGithub(loc.repo);
 }
 
-async function loadLocal(project: string, artifactName?: string | null, base?: string | null, head?: string | null): Promise<AnalysisContent> {
+async function loadLocal(
+  project: string,
+  artifactName?: string | null,
+  base?: string | null,
+  head?: string | null,
+  baseArtifactName?: string | null,
+): Promise<AnalysisContent> {
   const a = await localAnalysis(project);
   const artifacts = a.artifacts ?? [];
   if (!artifacts.length) {
-    return { readme_html: a.readme_html, files: a.patches.flatMap((p) => parseUnifiedDiff(p.text)), artifacts: [] };
+    return { notes_html: a.notes_html, notes_path: a.notes_path, files: a.patches.flatMap((p) => parseUnifiedDiff(p.text)), artifacts: [] };
   }
   const artifact = artifacts.find((x) => x.name === artifactName) ?? artifacts[0];
-  const common = { readme_html: a.readme_html, artifacts, artifact, base: base ?? undefined, head: head ?? undefined, project };
-  if (!base || !head) return { ...common, files: [] };
-  const diff = await artifactDiff(project, artifact, base, head);
+  // Comparing two artifacts: the base version is the other artifact's.
+  const baseArtifact = artifacts.find((x) => x.name === baseArtifactName && x.name !== artifact.name);
+  const common = { notes_html: a.notes_html, notes_path: a.notes_path, artifacts, artifact, baseArtifact, base: base ?? undefined, head: head ?? undefined, project };
+  // A version diffed with itself is empty: don't run an engine for it (an artifact with one version starts here).
+  if (!base || !head || (base === head && !baseArtifact)) return { ...common, files: [] };
+  const diff = await artifactDiff(project, artifact, base, head, baseArtifact);
   return diff.kind === "binary" ? { ...common, files: [], binary: diff.functions } : { ...common, files: parseUnifiedDiff(diff.text) };
 }
 
 // Web: stored-patches projects show their files; artifact projects need the desktop app.
 async function loadGithub(repo: Repo): Promise<AnalysisContent> {
-  const [content, artifacts] = await Promise.all([repoContent(repo), githubArtifacts(repo)]);
-  if (artifacts.length) return { readme_html: content.readme_html, files: [], artifacts, needsDesktop: true };
-  return { readme_html: content.readme_html, files: content.files, artifacts: [] };
+  const content = await repoContent(repo);
+  if (content.artifacts.length) return { notes_html: content.notes_html, files: [], artifacts: content.artifacts, needsDesktop: true };
+  return { notes_html: content.notes_html, files: content.files, artifacts: [] };
 }

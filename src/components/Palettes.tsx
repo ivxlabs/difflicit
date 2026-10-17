@@ -27,7 +27,7 @@ function Snippet({ text, query }: { text: string; query: string }) {
   );
 }
 
-/** The write-up's text, a line per paragraph, heading or list item. DOMParser documents run and load nothing. */
+/** The notes' text, a line per paragraph, heading or list item. DOMParser documents run and load nothing. */
 function textLines(html: string): string[] {
   const body = new DOMParser().parseFromString(html, "text/html").body;
   body.querySelectorAll("p, li, h1, h2, h3, h4, h5, h6, pre, tr, blockquote, br").forEach((el) => el.after("\n"));
@@ -37,12 +37,12 @@ function textLines(html: string): string[] {
     .filter(Boolean);
 }
 
-/** ⌘K: full-text search of the open analysis, its write-up and every line of its patches. */
+/** ⌘K: full-text search of the open analysis, its notes and every line of its patches. */
 export function SearchPick({ location, onJump, onClose }: { location: Location; onJump: (file: string | null, line: number | null) => void; onClose: () => void }) {
   const [content] = useAsync(() => loadAnalysis(location), [locationId(location)]);
   // Parsed once per analysis, not per keystroke.
   const index = useMemo(
-    () => content && { writeup: textLines(content.readme_html ?? ""), files: content.files.map((f) => ({ path: f.path, lines: diffLines(f) })) },
+    () => content && { notes: textLines(content.notes_html ?? ""), files: content.files.map((f) => ({ path: f.path, lines: diffLines(f) })) },
     [content],
   );
 
@@ -50,9 +50,9 @@ export function SearchPick({ location, onJump, onClose }: { location: Location; 
     const q = query.trim().toLowerCase();
     if (!index || q.length < 2) return [];
     const found: PickItem[] = [];
-    index.writeup.forEach((text, i) => {
+    index.notes.forEach((text, i) => {
       if (text.toLowerCase().includes(q)) {
-        found.push({ key: `w${i}`, icon: <BookIcon size={14} />, title: <Snippet text={text} query={q} />, detail: "Write-up", run: () => onJump(null, null) });
+        found.push({ key: `w${i}`, icon: <BookIcon size={14} />, title: <Snippet text={text} query={q} />, detail: "Notes", run: () => onJump(null, null) });
       }
     });
     for (const file of index.files) {
@@ -78,7 +78,7 @@ export function SearchPick({ location, onJump, onClose }: { location: Location; 
     <QuickPick
       placeholder={`Search ${location.kind === "github" ? location.repo.full_name : location.folder}…`}
       items={items}
-      empty={(query) => (!index ? "Loading the analysis…" : query.trim().length < 2 ? "Search the write-up and every patch." : "No matches.")}
+      empty={(query) => (!index ? "Loading the analysis…" : query.trim().length < 2 ? "Search the notes and every patch." : "No matches.")}
       onClose={onClose}
     />
   );

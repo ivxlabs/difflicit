@@ -40,20 +40,20 @@ export function AnalyzeButton({ project, repos, upstream, viewer, onConnect, onO
     if (own) return onOpen(own);
     setAsking(true);
   };
-  useCommand("analyze", analyze, !(viewer && !repos));
+  useCommand("get-copy", analyze, !(viewer && !repos));
 
   return (
     <>
       <button
-        className="btn primary analyze"
+        className="btn"
         disabled={Boolean(viewer) && !repos}
         onClick={(e) => {
           e.stopPropagation(); // it sits in the project header, which toggles on click
           analyze();
         }}
-        title={own ? `Open ${own.full_name}` : `Analyze ${project.id} in your own GitHub repository`}
+        title={own ? `Open ${own.full_name} in the desktop app` : `Get your own copy of ${project.id}'s analysis on GitHub`}
       >
-        Analyze
+        Get a copy
       </button>
       {asking && viewer && (
         <StartDialog project={project} upstream={upstream} viewer={viewer} onClose={() => setAsking(false)} onOpen={onOpen} />

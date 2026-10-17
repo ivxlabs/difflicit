@@ -31,3 +31,8 @@ tokio-tungstenite = "0.24"
 
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
 tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
+
+# rust-ini 0.21.3 added fields to a public struct that tauri-plugin-deep-link 2.6.2 builds by hand (on Linux only),
+# so the Linux build fails with it. Pinned until the plugin builds with 0.21.3; then this can go.
+[target.'cfg(target_os = "linux")'.dependencies]
+rust-ini = "=0.21.1"

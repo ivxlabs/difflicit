@@ -1,7 +1,7 @@
 name: desktop
 
-# A version tag (`npm run release`, see scripts/release.mjs) drafts a GitHub Release with notes from the commits
-# since the previous version, then builds the desktop app for macOS, Windows and Linux and attaches the
+# A version tag (`npm run release`, see scripts/release.mjs) drafts a GitHub Release with the notes written into the
+# tag (else the commits since the previous version), then builds the desktop app for macOS, Windows and Linux and attaches the
 # installers. Review the draft and publish it. Run it by hand to rebuild an existing tag.
 on:
   push:
@@ -40,11 +40,19 @@ jobs:
       - name: Release notes
         run: |
           previous=$(git describe --tags --abbrev=0 --match 'v*' "$TAG^" 2>/dev/null || true)
+          # Notes written at release time (npm run release) ride in the tag's message; without them, the commits.
+          # Fetched again: checking out a tag can leave it without its message (actions/checkout#290).
+          git fetch --quiet --force origin "refs/tags/$TAG:refs/tags/$TAG"
+          written=$(git for-each-ref "refs/tags/$TAG" --format='%(contents:body)')
           {
             echo "## What's changed"
             echo
-            git log --no-merges --pretty='- %s (%h)' "${previous:+$previous..}$TAG" \
-              | grep -v -E '^- Release v[0-9]' || echo "- First release"
+            if [ -n "$written" ]; then
+              printf '%s\n' "$written"
+            else
+              git log --no-merges --pretty='- %s (%h)' "${previous:+$previous..}$TAG" \
+                | grep -v -E '^- Release v[0-9]' || echo "- First release"
+            fi
             echo
             if [ -n "$previous" ]; then
               echo "**Full changelog:** https://github.com/$GITHUB_REPOSITORY/compare/$previous...$TAG"

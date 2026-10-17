@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
-import { DiffAddedIcon, DiffModifiedIcon, DiffRemovedIcon, DiffRenamedIcon } from "@primer/octicons-react";
+import { CopyIcon, DiffAddedIcon, DiffModifiedIcon, DiffRemovedIcon, DiffRenamedIcon, EyeIcon } from "@primer/octicons-react";
 import type { DiffFile } from "../lib/diff";
+import { contextMenu, copyText } from "./ContextMenu";
 import { DiffStat } from "./DiffView";
 
 const STATUS_ICON = {
@@ -24,7 +25,15 @@ export function FileList({
       {files.map((f, i) => {
         const Icon = STATUS_ICON[f.status];
         return (
-          <div key={i} className={`list-item file ${i === selected ? "selected" : ""}`} onClick={() => onSelect(i)}>
+          <div
+            key={i}
+            className={`list-item file ${i === selected ? "selected" : ""}`}
+            onClick={() => onSelect(i)}
+            {...contextMenu([
+              { label: "Show diff", icon: <EyeIcon size={14} />, run: () => onSelect(i) },
+              { label: "Copy path", icon: <CopyIcon size={14} />, run: () => copyText(f.path) },
+            ])}
+          >
             <div className="main">
               <div className="title" title={f.path}>
                 <bdi>{f.path}</bdi>

@@ -191,6 +191,45 @@ pub fn write_note(project: String, path: String, text: String) -> Result<(), Str
     std::fs::write(&file, text).map_err(|e| e.to_string())
 }
 
+/// Rename a note in its folder. `name` may leave out the extension (the note keeps its own) or change it between
+/// .diffmd and .md. A project whose notes it is (the project file's `notes`) follows it. Returns its new path.
+#[tauri::command]
+pub fn rename_note(project: String, path: String, name: String) -> Result<String, String> {
+    let dir = PathBuf::from(&project);
+    let file = inside(&dir, &path)?;
+    let ext = extension(&file);
+    if !matches!(ext.as_str(), "diffmd" | "md" | "markdown") {
+        return Err("Only notes (.diffmd or .md files) can be renamed here.".into());
+    }
+    let name = name.trim().replace(' ', "-");
+    let named = Path::new(&name);
+    let new_name = match extension(named).as_str() {
+        "diffmd" | "md" | "markdown" => name.clone(),
+        _ => format!("{name}.{ext}"),
+    };
+    if safe_name(&new_name).is_none() || new_name.starts_with('.') {
+        return Err("A note's name can use letters, digits, spaces, - and _.".into());
+    }
+    let rel = match path.rsplit_once('/') {
+        Some((folder, _)) => format!("{folder}/{new_name}"),
+        None => new_name.clone(),
+    };
+    if rel == path {
+        return Ok(rel);
+    }
+    let target = file.with_file_name(&new_name);
+    if target.exists() {
+        return Err(format!("{rel} already exists."));
+    }
+    std::fs::rename(&file, &target).map_err(|e| e.to_string())?;
+    let mut body = read_project(&dir);
+    if body.get("notes").and_then(Value::as_str) == Some(path.as_str()) {
+        body["notes"] = json!(rel);
+        write_project(&dir, &body)?;
+    }
+    Ok(rel)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -235,6 +274,15 @@ mod tests {
         write_note(p(), "README.diffmd".into(), "# Edited".into()).unwrap();
         assert_eq!(std::fs::read_to_string(fresh.join("README.diffmd")).unwrap(), "# Edited");
         assert!(write_note(p(), "difflicit.json".into(), "{}".into()).is_err());
+
+        // Renaming: the extension stays unless given, the project's notes follow, and nothing gets overwritten.
+        assert_eq!(rename_note(p(), "root-cause.diffmd".into(), "why it broke".into()).unwrap(), "why-it-broke.diffmd");
+        assert_eq!(read_project(&fresh)["notes"], "why-it-broke.diffmd");
+        assert!(fresh.join("why-it-broke.diffmd").is_file() && !fresh.join("root-cause.diffmd").exists());
+        assert!(rename_note(p(), "README.diffmd".into(), "why-it-broke".into()).is_err()); // taken
+        assert!(rename_note(p(), "README.diffmd".into(), "../out".into()).is_err());
+        assert!(rename_note(p(), "difflicit.json".into(), "x".into()).is_err());
+        assert_eq!(rename_note(p(), "README.diffmd".into(), "intro.md".into()).unwrap(), "intro.md");
         let _ = std::fs::remove_dir_all(&fresh);
         let _ = std::fs::remove_dir_all(&dir);
     }

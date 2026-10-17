@@ -12,6 +12,10 @@
     "clientId": "51b71227-0d86-4cf8-9fe9-6f44d3764281",
     "url": "https://iam.ivx.run"
   },
+  "engines": [
+    { "command": "viper", "install": "brew install ivxlabs/tap/viper" },
+    { "command": "hyperviper" }
+  ],
   "sponsor": "https://github.com/sponsors/0xcrypto",
   "partners": [
     {

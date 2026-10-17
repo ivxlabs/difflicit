@@ -7,7 +7,10 @@ export interface Route {
   repo: string | null;
   /** Path of the diff file to show; null means the notes. */
   file: string | null;
-  /** Desktop: a file or folder picked in the project tree (relative to the project), shown instead of a diff. */
+  /**
+   * A file or folder in the project (relative to it): on the desktop, picked in the sidebar and shown instead
+   * of a diff; in an embed, the note to show.
+   */
   path: string | null;
   /** The line to jump to in that file (its index among the file's diff lines). */
   line: number | null;
@@ -17,7 +20,7 @@ export interface Route {
   baseArtifact: string | null;
   base: string | null;
   head: string | null;
-  /** Compact, read-only layout for embedding in other pages (an <iframe>). */
+  /** Embedded in another page (an <iframe>): just a note (`path`, else the project's notes). */
   embed: boolean;
 }
 

@@ -1,16 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
 import { useEffect, useState } from "react";
-import { ArrowRightIcon, XIcon } from "@primer/octicons-react";
+import { ArrowSwitchIcon, XIcon } from "@primer/octicons-react";
 import type { Artifact } from "../types";
-import { defaultPair, versionOptions } from "../lib/analysis";
+import { type Pair, type Side, defaultPair, versionOptions } from "../lib/analysis";
+import { BUILT_IN, type Engine, lastEngine, loadEngines, usable } from "../lib/engines";
 import { gitVersions } from "../lib/desktop";
 import { useAsync } from "../lib/util";
 import { DocsLink } from "./BlankSlate";
-
-export interface Side {
-  artifact: string;
-  version: string;
-}
 
 /** One side of the comparison: an artifact and one of its versions. */
 function SidePicker({ label, project, artifacts, side, fallback, onChange }: {
@@ -73,19 +69,27 @@ function SidePicker({ label, project, artifacts, side, fallback, onChange }: {
 }
 
 /**
- * Desktop: pick the two things to compare — two versions of one artifact, or versions of two artifacts — and
- * analyze what changed between them, into a diffmd note in the project.
+ * Desktop: pick the two things to compare — two versions of one artifact, or versions of two artifacts — and the
+ * engine that analyzes what changed between them, into a diffmd note in the project.
  */
-export function AnalyzeDialog({ project, artifacts, initial, onAnalyze, onClose }: {
+export function AnalyzeDialog({ project, artifacts, initial, enginesChanged, onAnalyze, onManageEngines, onClose }: {
   project: string;
   artifacts: Artifact[];
-  initial: { before: Side; after: Side };
-  /** Analyze the pair and write it up in the project; a rejection is shown here. */
-  onAnalyze: (before: Side, after: Side) => Promise<void>;
+  initial: Pair;
+  /** Analyze the pair with the engine and write it up in the project; a rejection is shown here. */
+  onAnalyze: (pair: Pair, engine: Engine) => Promise<void>;
+  onManageEngines: () => void;
+  /** Changes when engines were installed or removed, to list them again. */
+  enginesChanged: number;
   onClose: () => void;
 }) {
   const [before, setBefore] = useState(initial.before);
   const [after, setAfter] = useState(initial.after);
+  // The engines installed on this computer (the built-in one first).
+  const [known] = useAsync(() => loadEngines(), [], [enginesChanged]);
+  const engines: Engine[] = known ? usable(known) : [BUILT_IN];
+  const [command, setCommand] = useState(lastEngine);
+  const engine = engines.find((e) => e.command === command) ?? BUILT_IN;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const kind = (name: string) => artifacts.find((a) => a.name === name)?.kind;
@@ -104,7 +108,7 @@ export function AnalyzeDialog({ project, artifacts, initial, onAnalyze, onClose 
     setBusy(true);
     setError(null);
     try {
-      await onAnalyze(before, after);
+      await onAnalyze({ before, after }, engine);
     } catch (err) {
       setError(String(err));
       setBusy(false);
@@ -122,18 +126,46 @@ export function AnalyzeDialog({ project, artifacts, initial, onAnalyze, onClose 
         </header>
         <div className="content">
           <p className="muted">
-            Pick what to compare. Difflicit diffs the two, predicts what the change was about from patterns in it
-            (without AI), and writes it up as a note in the project for you to check and edit. <DocsLink page="analyses" />
+            Pick what to compare and an engine to analyze it. The analysis is written up as a note in the project, for
+            you to check and edit. <DocsLink page="analyses" />
           </p>
           {!artifacts.length ? (
             <div className="notice">Add an artifact first: there's nothing to compare yet.</div>
           ) : (
             <div className="analyze-sides">
               <SidePicker label="Before" project={project} artifacts={artifacts} side={before} fallback="base" onChange={setBefore} />
-              <ArrowRightIcon size={16} className="muted" />
+              <button
+                type="button"
+                className="btn ghost analyze-swap"
+                onClick={() => {
+                  setBefore(after);
+                  setAfter(before);
+                }}
+                title="Swap before and after"
+                aria-label="Swap before and after"
+              >
+                <ArrowSwitchIcon size={16} />
+              </button>
               <SidePicker label="After" project={project} artifacts={artifacts} side={after} fallback="head" onChange={setAfter} />
             </div>
           )}
+          <div className="analyze-engine">
+            <label className="field">
+              <span>Engine</span>
+              <select className="select" value={engine.command} onChange={(e) => setCommand(e.target.value)}>
+                {engines.map((e) => (
+                  <option key={e.command} value={e.command}>
+                    {e.name}
+                    {e.version ? ` ${e.version}` : ""}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button type="button" className="btn ghost" onClick={onManageEngines}>
+              Manage engines…
+            </button>
+          </div>
+          {engine.description && <div className="muted small-note">{engine.description}</div>}
           {problem && artifacts.length > 0 && <div className="muted small-note">{problem}</div>}
           {error && <div className="notice error">{error}</div>}
         </div>

@@ -10,6 +10,7 @@
 //! plugin passes them to the web app, which asks before calling `analyze_locally`.
 
 mod diff;
+mod engines;
 mod info;
 mod oauth;
 mod vnc;
@@ -88,8 +89,15 @@ fn local_projects(app: AppHandle, opened: Vec<String>) -> Result<Vec<Value>, Str
 const MAX_PATCHES: usize = 30;
 const MAX_PATCH_BYTES: u64 = 2_000_000;
 
-/// Every *.diff / *.patch under `dir` (relative paths, sorted), skipping .git and other hidden folders.
-fn patch_files(dir: &Path, rel: &Path, out: &mut Vec<PathBuf>) {
+/// The project's own patches (*.diff / *.patch) and notes (*.diffmd) under `dir`, as relative paths, sorted.
+/// Skips .git and other hidden folders, and `artifacts/`: what's compared, not the project's own files.
+#[derive(Default)]
+struct ProjectFiles {
+    patches: Vec<PathBuf>,
+    notes: Vec<PathBuf>,
+}
+
+fn project_files(dir: &Path, rel: &Path, out: &mut ProjectFiles) {
     let Ok(entries) = std::fs::read_dir(dir) else { return };
     let mut entries: Vec<_> = entries.flatten().collect();
     entries.sort_by_key(|e| e.file_name());
@@ -97,21 +105,23 @@ fn patch_files(dir: &Path, rel: &Path, out: &mut Vec<PathBuf>) {
         let name = entry.file_name();
         let name = name.to_string_lossy();
         let path = entry.path();
-        if name.starts_with('.') || name == "node_modules" {
+        if name.starts_with('.') || name == "node_modules" || (rel.as_os_str().is_empty() && name == "artifacts") {
             continue;
         }
+        let lower = name.to_ascii_lowercase();
         if path.is_dir() {
-            patch_files(&path, &rel.join(&*name), out);
-        } else if (name.ends_with(".diff") || name.ends_with(".patch"))
-            && entry.metadata().is_ok_and(|m| m.len() < MAX_PATCH_BYTES)
-        {
-            out.push(rel.join(&*name));
+            project_files(&path, &rel.join(&*name), out);
+        } else if lower.ends_with(".diffmd") {
+            out.notes.push(rel.join(&*name));
+        } else if (lower.ends_with(".diff") || lower.ends_with(".patch")) && entry.metadata().is_ok_and(|m| m.len() < MAX_PATCH_BYTES) {
+            out.patches.push(rel.join(&*name));
         }
     }
 }
 
 /// A project folder as the app shows it: the project its project file names (null without one), its notes
-/// rendered to HTML (sanitized by the app) with their path, and the text of each patch, like the GitHub version.
+/// rendered to HTML (sanitized by the app) with their path, every note in it (*.diffmd), and the text of each
+/// patch, like the GitHub version.
 #[tauri::command]
 async fn local_analysis(path: String) -> Result<Value, String> {
     let dir = PathBuf::from(&path);
@@ -119,14 +129,16 @@ async fn local_analysis(path: String) -> Result<Value, String> {
         return Err(format!("{path} isn't a folder (anymore)."));
     }
     let (notes_path, notes_html) = info::notes(&dir);
-    let mut found = Vec::new();
-    patch_files(&dir, Path::new(""), &mut found);
+    let mut found = ProjectFiles::default();
+    project_files(&dir, Path::new(""), &mut found);
+    let slashed = |rel: &PathBuf| rel.to_string_lossy().replace('\\', "/");
     let patches: Vec<Value> = found
+        .patches
         .iter()
         .take(MAX_PATCHES)
         .filter_map(|rel| {
             let text = std::fs::read_to_string(dir.join(rel)).ok()?;
-            Some(json!({ "path": rel.to_string_lossy().replace('\\', "/"), "text": text }))
+            Some(json!({ "path": slashed(rel), "text": text }))
         })
         .collect();
     Ok(json!({
@@ -134,6 +146,7 @@ async fn local_analysis(path: String) -> Result<Value, String> {
         "artifacts": analysis_field(&dir, "artifacts"),
         "notes_path": notes_path,
         "notes_html": notes_html,
+        "notes_files": found.notes.iter().map(slashed).collect::<Vec<_>>(),
         "patches": patches,
     }))
 }
@@ -189,8 +202,32 @@ async fn analyze_locally(app: AppHandle, repo: String) -> Result<String, String>
     Ok(path)
 }
 
+/// The tools Difflicit runs (git, radare2, ipsw, analysis engines) are usually installed with Homebrew or Cargo.
+/// An app opened from the Dock or Finder doesn't get the shell's PATH, which has their folders; this adds them.
+fn with_tool_folders_on_path() {
+    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
+    let extra = [
+        PathBuf::from("/opt/homebrew/bin"),
+        PathBuf::from("/usr/local/bin"),
+        PathBuf::from("/home/linuxbrew/.linuxbrew/bin"),
+        home.join(".cargo/bin"),
+        home.join(".local/bin"),
+    ];
+    let mut paths: Vec<PathBuf> = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
+    for dir in extra {
+        if dir.is_dir() && !paths.contains(&dir) {
+            paths.push(dir);
+        }
+    }
+    if let Ok(joined) = std::env::join_paths(paths) {
+        // SAFETY: called first thing in run(), before any other thread exists to read the environment.
+        unsafe { std::env::set_var("PATH", joined) };
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    with_tool_folders_on_path();
     let mut builder = tauri::Builder::default();
     // Must come first: a link opened while the app runs starts a second copy (Windows, Linux), which hands the
     // link to this one (the deep-link feature) and quits.
@@ -227,23 +264,24 @@ pub fn run() {
             diff::init_project,
             diff::add_git_artifact,
             diff::add_file_artifact,
-            diff::add_file_version,
+            diff::remove_artifact,
             diff::git_versions,
             diff::artifact_diff,
             diff::artifact_function_diff,
             diff::diff_tools,
             diff::installed_binaries,
-            diff::list_dir,
             diff::dsc_caches,
             diff::dsc_images,
             diff::add_dsc_artifact,
-            diff::add_dsc_version,
             diff::extract_cache_from_ipsw,
             diff::download_ipsw,
             diff::dsc_diff,
+            engines::list_engines,
+            engines::run_engine,
             info::file_info,
             info::create_note,
             info::write_note,
+            info::rename_note,
             info::render_markdown,
             diff::is_github,
             vnc::vnc_connect,

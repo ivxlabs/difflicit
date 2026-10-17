@@ -4,11 +4,10 @@ import { ChevronDownIcon, ChevronRightIcon } from "@primer/octicons-react";
 import type { Block, Link, Project } from "../types";
 
 /** The project summary bar (click to expand its details), with the page's main action on the right. */
-export function ProjectHeader({ project, action, compact }: { project: Project; action?: React.ReactNode; compact?: boolean }) {
-  // Compact (embeds) starts collapsed and doesn't remember the choice.
-  const [open, setOpen] = useState(() => !compact && localStorage.getItem("difflicit-details") !== "closed");
+export function ProjectHeader({ project, action }: { project: Project; action?: React.ReactNode }) {
+  const [open, setOpen] = useState(() => localStorage.getItem("difflicit-details") !== "closed");
   const toggle = () => {
-    if (!compact) localStorage.setItem("difflicit-details", open ? "closed" : "open");
+    localStorage.setItem("difflicit-details", open ? "closed" : "open");
     setOpen(!open);
   };
 

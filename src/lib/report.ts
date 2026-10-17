@@ -2,6 +2,7 @@
 // Analyze's output: what a change was probably about (lib/predict.ts), written up as a diffmd note for the
 // project, with the lines each finding rests on as patch excerpts the user can check and edit.
 import type { AnalysisContent, BinaryFunction } from "../types";
+import { shortVersion } from "./analysis";
 import { artifactFunctionDiff } from "./desktop";
 import { type DiffFile, type DiffLine, diffLines, parseUnifiedDiff } from "./diff";
 import { type Prediction, predict } from "./predict";
@@ -77,15 +78,13 @@ function excerpt(file: DiffFile, at: number[]): string {
   return ["```diff", header, ...ranges.map(([from, to]) => hunk(lines, from, to)), "```"].join("\n");
 }
 
-/** A version as written in the note: a commit by its short hash. */
-const short = (v?: string) => (v && /^[0-9a-f]{40}$/.test(v) ? v.slice(0, 12) : (v ?? ""));
 const strength = (score: number) => (score >= 8 ? "strong" : score >= 4 ? "likely" : "weak");
 const count = (n: number, what: string) => `${n} ${what}${n === 1 ? "" : "s"}`;
 
 /** The analysis as a diffmd note: the headline, what was compared, and each finding with its evidence. */
 export function reportNote(content: AnalysisContent, { prediction, files }: { prediction: Prediction; files: DiffFile[] }): string {
   const { binary, artifact, baseArtifact, base, head } = content;
-  const compared = `${baseArtifact?.name ?? artifact?.name} ${short(base)} → ${artifact?.name} ${short(head)}`;
+  const compared = `${baseArtifact?.name ?? artifact?.name} ${shortVersion(base)} → ${artifact?.name} ${shortVersion(head)}`;
   const scope = binary
     ? (["changed", "added", "removed"] as const).map((s) => count(binary.filter((f) => f.status === s).length, `${s} function`)).join(", ")
     : `${count(prediction.stats.files, "file")}, +${prediction.stats.additions} −${prediction.stats.deletions}`;
@@ -106,11 +105,4 @@ export function reportNote(content: AnalysisContent, { prediction, files }: { pr
   if (!prediction.findings.length)
     out.push("## What changed", "Nothing here matched a known pattern. Look through the diff and write down what you find.");
   return out.join("\n\n") + "\n";
-}
-
-/** The note's name: what was compared, e.g. `analysis-libfoo-1.2-to-1.3`. */
-export function reportName(content: AnalysisContent): string {
-  const from = content.baseArtifact ? `${content.baseArtifact.name}-${short(content.base)}` : short(content.base);
-  const name = `analysis-${content.artifact?.name}-${from}-to-${content.baseArtifact ? `${content.artifact?.name}-` : ""}${short(content.head)}`;
-  return name.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/-+/g, "-").slice(0, 100).replace(/[-.]+$/, "");
 }

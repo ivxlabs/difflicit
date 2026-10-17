@@ -9,17 +9,19 @@ import { ToolbarDropdown } from "./ToolbarItem";
 interface Props {
   project: Project;
   repo: Repo | null;
-  file: string | null;
 }
 
-/** Share what's on screen: the URL already encodes the project, repository and open file. */
-export function ShareMenu({ project, repo, file }: Props) {
+/**
+ * Share the project: a link to all of it (its notes, patches and artifacts), not to one file. Embedding is about
+ * notes instead: an <iframe> that shows the project's diffmd notes, diffs included, in any HTML page.
+ */
+export function ShareMenu({ project, repo }: Props) {
   const [copied, setCopied] = useState<"link" | "embed" | null>(null);
-  const subject = file ? `${project.id}: ${file}` : project.id;
-  const text = `${subject}${project.summary ? `: ${project.summary}` : ""}`.slice(0, 200) + ` · patch analysis on ${INSTANCE.name}`;
+  const text = `${project.id}${project.summary ? `: ${project.summary}` : ""}`.slice(0, 200) + ` · patch analysis on ${INSTANCE.name}`;
 
-  const link = urlFor({ embed: false });
-  const embedCode = `<iframe src="${urlFor({ embed: true })}" title="${`${subject} · ${INSTANCE.name}`.replace(/"/g, "&quot;")}" width="100%" height="560" style="height: 560px !important; max-width: 100%; border: 0; border-radius: 8px" loading="lazy"></iframe>`;
+  const link = urlFor({ embed: false, file: null, line: null, path: null });
+  const title = `${project.id} notes · ${INSTANCE.name}`.replace(/"/g, "&quot;");
+  const embedCode = `<iframe src="${urlFor({ embed: true, file: null, line: null, path: null })}" title="${title}" width="100%" height="560" style="height: 560px !important; max-width: 100%; border: 0; border-radius: 8px" loading="lazy"></iframe>`;
   // The inline !important matters: many blog themes give every iframe `height: auto`, which collapses it to 150px.
 
   const copy = async (what: "link" | "embed") => {
@@ -34,7 +36,7 @@ export function ShareMenu({ project, repo, file }: Props) {
   ];
 
   return (
-    <ToolbarDropdown icon={<ShareIcon size={16} />} top="Share" main={file ? "This diff" : "This analysis"} width={160}>
+    <ToolbarDropdown icon={<ShareIcon size={16} />} top="Share" main="This project" width={160}>
       {(close) => (
         <div className="dropdown menu action-menu">
           {repo?.private && (
@@ -50,9 +52,9 @@ export function ShareMenu({ project, repo, file }: Props) {
             {copied === "link" ? <CheckIcon size={14} /> : <CopyIcon size={14} />}
             <div className="main">{copied === "link" ? "Copied" : "Copy link"}</div>
           </div>
-          <div className="list-item" onClick={() => copy("embed")} title="An <iframe> for articles and blog posts">
+          <div className="list-item" onClick={() => copy("embed")} title="The project's diffmd notes, diffs included, as an <iframe> for articles and blog posts">
             {copied === "embed" ? <CheckIcon size={14} /> : <CodeIcon size={14} />}
-            <div className="main">{copied === "embed" ? "Copied" : "Copy embed code"}</div>
+            <div className="main">{copied === "embed" ? "Copied" : "Embed the notes"}</div>
           </div>
           {targets.map((t) => (
             <a key={t.label} className="list-item" href={t.href} target="_blank" rel="noreferrer" onClick={close}>
@@ -65,7 +67,7 @@ export function ShareMenu({ project, repo, file }: Props) {
               className="list-item"
               onClick={() => {
                 close();
-                navigator.share({ title: `${subject} · ${INSTANCE.name}`, text, url: link }).catch(() => {});
+                navigator.share({ title: `${project.id} · ${INSTANCE.name}`, text, url: link }).catch(() => {});
               }}
             >
               <ShareIcon size={14} />

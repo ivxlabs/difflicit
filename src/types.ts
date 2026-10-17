@@ -151,6 +151,9 @@ export interface BinaryFunction {
 
 export interface RepoContent {
   notes_html: string | null;
+  /** The file analysis.json names as the notes, if any, and every note (*.diffmd) in the repository. */
+  notes_path: string | null;
+  notes_files: string[];
   /** The artifacts its analysis.json declares ([] for stored patches). */
   artifacts: Artifact[];
   /** Every file changed by the repo's *.diff / *.patch files, in order. */
@@ -162,6 +165,8 @@ export interface AnalysisContent {
   /** The notes (Markdown or diffmd) rendered to HTML, and the file they came from (desktop). */
   notes_html: string | null;
   notes_path?: string | null;
+  /** Every note (*.diffmd) in the project, for the sidebar's Notes. */
+  notes_files: string[];
   files: DiffFile[];
   /** Present when the two versions are binaries; `files` is then empty and a function's diff loads on demand. */
   binary?: BinaryFunction[];

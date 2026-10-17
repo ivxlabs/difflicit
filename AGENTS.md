@@ -25,10 +25,10 @@ projects are Apple CVEs. Read the README's *How it works* first.
 | Path | What |
 | --- | --- |
 | `src/` | The web app (React 19, TypeScript, Vite). `App.tsx` is the shell, `components/` the UI. |
-| `src/lib/` | GitHub API (`github.ts`), the diff an analysis shows (`analysis.ts`), project naming (`projects.ts`), auth (`access.ts`), routing (`route.ts`), diff parsing (`diff.ts`), desktop bridge (`desktop.ts`). |
+| `src/lib/` | GitHub API (`github.ts`), the diff an analysis shows (`analysis.ts`), analysis engines and the built-in one (`engines.ts`, `predict.ts`, `report.ts`), project naming (`projects.ts`), auth (`access.ts`), routing (`route.ts`), diff parsing (`diff.ts`), desktop bridge (`desktop.ts`). |
 | `src/types.ts` | The catalog format every instance's API follows. |
 | `src/iam/` | Optional "Sign In" with iam.ivx.run. Only built when `__IAM__` is true; must not run at import time. |
-| `src-tauri/` | The desktop app (Tauri 2, Rust). Local capabilities are Tauri commands in `src/lib.rs`; artifacts and diffing (git, radare2, ipsw) in `src/diff.rs`; the project tree's file views and notes in `src/info.rs`; the VNC bridge in `src/vnc.rs`. |
+| `src-tauri/` | The desktop app (Tauri 2, Rust). Local capabilities are Tauri commands in `src/lib.rs`; artifacts and diffing (git, radare2, ipsw) in `src/diff.rs`; file views and notes in `src/info.rs`; analysis engines (installing and running them) in `src/engines.rs`; the VNC bridge in `src/vnc.rs`. |
 | `scripts/main.py` | ivx/xnu's scraper: Apple advisories + NVD into the catalog (Python, run with `uv`). |
 | `scripts/release.mjs` | Version bumps and releases. |
 | `difflicit.config.json` | Instance settings: name, icon, API base, and `projects` (label, owner, naming convention). |

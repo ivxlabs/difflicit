@@ -9,14 +9,14 @@ import {
   LinkExternalIcon,
   LockIcon,
   NoteIcon,
-  PackageIcon,
   RepoForkedIcon,
   RepoIcon,
   StarIcon,
+  TrashIcon,
 } from "@primer/octicons-react";
+import { useState } from "react";
 import { INSTANCE, PRODUCT, PROJECTS } from "../config";
 import type { Artifact, Location, Project, Repo, Viewer } from "../types";
-import type { VersionOption } from "../lib/analysis";
 import { AccountMenu } from "../iam/AccountMenu";
 import { keyLabel, runCommand } from "../lib/commands";
 import { IS_DESKTOP } from "../lib/desktop";
@@ -35,26 +35,15 @@ interface Props {
   repos: Repo[];
   /** Desktop: this project's analyses in folders on this computer. */
   folders: Location[];
-  /** The project's artifacts, the one on screen, its versions, and the two version ids being diffed. */
+  /** The project's artifacts (in a project folder), to add to and remove from. What's compared is Analyze's. */
   artifacts: Artifact[];
-  artifact?: Artifact;
-  /** When comparing two artifacts: the base version's artifact, and its versions (else the artifact's own). */
-  baseArtifact?: Artifact;
-  versions: VersionOption[];
-  baseVersions: VersionOption[];
-  base?: string;
-  head?: string;
-  onArtifact: (name: string) => void;
-  onPair: (base: string, head: string) => void;
   onAddArtifact: () => void;
-  onAddVersion: (artifact: string) => void;
-  onAddCacheVersion: (artifact: string) => void;
+  onRemoveArtifact: (name: string) => void;
   /** The analysis on screen, a folder or a repository; `repo` is it when it's on GitHub. */
   location: Location | null;
   repo: Repo | null;
   /** The owner's published analysis of this project, if any. */
   upstream: Repo | null;
-  file: string | null;
   viewer: Viewer | null;
   onPick: (id: string) => void;
   onRepo: (fullName: string) => void;
@@ -70,8 +59,8 @@ const RepoKindIcon = ({ repo }: { repo: Repo | null }) =>
   repo?.private ? <LockIcon size={16} /> : repo?.fork ? <RepoForkedIcon size={16} /> : <RepoIcon size={16} />;
 
 export function Toolbar(props: Props) {
-  const { mine, project, projectId, repos, folders, location, repo, upstream, file, viewer, onPick, onRepo, onAccount, onConnectSandbox } = props;
-  const { artifacts, artifact, baseArtifact, versions, baseVersions, base, head, onArtifact, onPair, onAddArtifact, onAddVersion, onAddCacheVersion } = props;
+  const { mine, project, projectId, repos, folders, location, repo, upstream, viewer, onPick, onRepo, onAccount, onConnectSandbox } = props;
+  const { artifacts, onAddArtifact, onRemoveArtifact } = props;
   const diffingArtifacts = location?.kind === "local";
   const menu = project?.menu;
 
@@ -119,24 +108,8 @@ export function Toolbar(props: Props) {
         top={diffingArtifacts ? "Artifacts" : repo ? `Repository (${repoKind(repo)})` : "Repository"}
         main={
           diffingArtifacts ? (
-            artifact ? (
-              <>
-                {baseArtifact ? (
-                  <>
-                    {baseArtifact.name} <span className="muted">· {base} →</span> {artifact.name} <span className="muted">·</span> {head}
-                  </>
-                ) : (
-                  <>
-                    {artifact.name}
-                    {base && head && (
-                      <>
-                        {" "}
-                        <span className="muted">· {base} →</span> {head}
-                      </>
-                    )}
-                  </>
-                )}
-              </>
+            artifacts.length ? (
+              `${artifacts.length} artifact${artifacts.length === 1 ? "" : "s"}`
             ) : (
               "No artifacts"
             )
@@ -153,84 +126,11 @@ export function Toolbar(props: Props) {
             <div className="dropdown menu artifacts-menu">
               {!artifacts.length && (
                 <div className="list-item notice-row">
-                  <div className="main muted">No artifacts yet. Add a git repo or a file to compare its versions.</div>
-                </div>
-              )}
-              {artifacts.length > 0 && (
-                <div className="artifacts-pick">
-                  {artifacts.length > 1 && (
-                    <label className="field">
-                      <span>Artifact</span>
-                      <select className="select" value={artifact?.name} onChange={(e) => onArtifact(e.target.value)}>
-                        {artifacts.map((a) => (
-                          <option key={a.name} value={a.name}>
-                            {a.name} ({a.kind})
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  )}
-                  <div className="artifacts-pair">
-                    <label className="field">
-                      <span>Base{baseArtifact && ` (${baseArtifact.name})`}</span>
-                      <select className="select" value={base ?? ""} onChange={(e) => head && onPair(e.target.value, head)} disabled={!baseVersions.length}>
-                        {baseVersions.map((v) => (
-                          <option key={v.id} value={v.id}>
-                            {v.label}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <span className="muted">→</span>
-                    <label className="field">
-                      <span>Head</span>
-                      <select className="select" value={head ?? ""} onChange={(e) => base && onPair(base, e.target.value)} disabled={!versions.length}>
-                        {versions.map((v) => (
-                          <option key={v.id} value={v.id}>
-                            {v.label}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  </div>
-                  {artifact && !versions.length && <div className="muted small-note">Loading versions…</div>}
-                  {artifact?.kind === "file" && (
-                    <div className="row">
-                      <button
-                        className="btn"
-                        onClick={() => {
-                          close();
-                          onAddVersion(artifact.name);
-                        }}
-                      >
-                        <PlusIcon size={14} /> Add version…
-                      </button>
-                      <button
-                        className="btn"
-                        onClick={() => {
-                          close();
-                          onAddCacheVersion(artifact.name);
-                        }}
-                        title="Extract this dylib from another dyld shared cache"
-                      >
-                        <PackageIcon size={14} /> From cache…
-                      </button>
-                    </div>
-                  )}
+                  <div className="main muted">No artifacts yet. Add a git repository or a file; Analyze compares their versions.</div>
                 </div>
               )}
               {artifacts.map((a) => (
-                <div
-                  key={a.name}
-                  className={`list-item two-line ${a.name === artifact?.name ? "selected" : ""}`}
-                  onClick={() => onArtifact(a.name)}
-                >
-                  {a.kind === "git" ? <GitCommitIcon size={16} /> : <FileIcon size={16} />}
-                  <div className="main">
-                    <div className="title mono">{a.name}</div>
-                    <div className="sub muted">{a.kind === "git" ? a.repo : `${a.versions.length} version${a.versions.length === 1 ? "" : "s"}`}</div>
-                  </div>
-                </div>
+                <ArtifactItem key={a.name} artifact={a} onRemove={() => onRemoveArtifact(a.name)} />
               ))}
               <button
                 className="btn"
@@ -305,7 +205,7 @@ export function Toolbar(props: Props) {
       {IS_DESKTOP && <SandboxMenu onConnect={onConnectSandbox} />}
 
       {/* Links from the desktop app would point at the app itself; share from the website instead. */}
-      {project && !IS_DESKTOP && <ShareMenu project={project} repo={repo} file={file} />}
+      {project && !IS_DESKTOP && <ShareMenu project={project} repo={repo} />}
       {upstream && <ContributeButton {...props} upstream={upstream} />}
       <StarButton variant="toolbar" />
       {__IAM__ ? (
@@ -319,6 +219,30 @@ export function Toolbar(props: Props) {
         />
       )}
     </header>
+  );
+}
+
+/** An artifact in the Artifacts menu: what it is, and Remove (asked twice: it deletes the project's copies). */
+function ArtifactItem({ artifact: a, onRemove }: { artifact: Artifact; onRemove: () => void }) {
+  const [confirming, setConfirming] = useState(false);
+  const versions = a.kind === "file" ? `${a.versions.length} version${a.versions.length === 1 ? "" : "s"}` : "git repository";
+  return (
+    <div className="list-item two-line artifact-item" onMouseLeave={() => setConfirming(false)}>
+      {a.kind === "git" ? <GitCommitIcon size={16} /> : <FileIcon size={16} />}
+      <div className="main">
+        <div className="title mono">{a.name}</div>
+        <div className="sub muted">{confirming ? `Deletes artifacts/${a.name} too` : versions}</div>
+      </div>
+      {confirming ? (
+        <button className="btn danger" onClick={onRemove}>
+          Remove
+        </button>
+      ) : (
+        <button className="icon-link" onClick={() => setConfirming(true)} title={`Remove ${a.name}`} aria-label={`Remove ${a.name}`}>
+          <TrashIcon size={14} />
+        </button>
+      )}
+    </div>
   );
 }
 

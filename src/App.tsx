@@ -7,21 +7,23 @@ import { INSTANCE, PARTNERS, PRODUCT, PROJECTS, SPONSOR, TAGLINE, docsUrl } from
 import { connectGitHub, onSignInError } from "./iam/session";
 import { CONNECT_LABEL, useSignedIn } from "./lib/access";
 import { hasCommand, keyLabel, runCommand, useCommand } from "./lib/commands";
-import { defaultPair, loadAnalysis, locationId, versionOptions } from "./lib/analysis";
-import { DOWNLOAD_URL, IS_DESKTOP, addFileVersion, createNote, gitVersions, initProject, localAnalysis, onAnalyzeLink, openExternal, pickFile, pickFolder, rememberFolder, revealFolder, setWindowTitle } from "./lib/desktop";
+import { type Pair, defaultPair, locationId, noteName, pairFrom, versionOptions } from "./lib/analysis";
+import { DOWNLOAD_URL, IS_DESKTOP, createNote, gitVersions, initProject, localAnalysis, removeArtifact, onAnalyzeLink, openExternal, pickFolder, rememberFolder, revealFolder, setWindowTitle } from "./lib/desktop";
 import { AddArtifact } from "./components/AddArtifact";
-import { AddCacheVersion } from "./components/AddCacheVersion";
 import { analysisRepos, myAnalysisRepos, viewer as loadViewer } from "./lib/github";
 import { projectOfRepo, repoName, sameId } from "./lib/projects";
-import { analyzeChange, reportName, reportNote } from "./lib/report";
+import { analyzeWith } from "./lib/engines";
 import { urlFor, useRoute } from "./lib/route";
 import { uniqueBy, useAsync } from "./lib/util";
 import { Analysis } from "./components/Analysis";
 import { AnalyzeButton } from "./components/AnalyzeButton";
 import { AnalyzeDialog } from "./components/AnalyzeDialog";
+import { EnginesDialog } from "./components/Engines";
 import { BlankSlate, DocsLink, Spinner } from "./components/BlankSlate";
 import { AnalyzeLocally, OpenInDesktop } from "./components/LocalAnalysis";
+import { NoteEmbed } from "./components/NoteEmbed";
 import { CommandPalette, SearchPick, type Command } from "./components/Palettes";
+import { ContextMenuHost, useNoDefaultContextMenu } from "./components/ContextMenu";
 import { StarButton } from "./components/StarButton";
 import { TokenDialog } from "./components/TokenDialog";
 import { Toolbar } from "./components/Toolbar";
@@ -41,7 +43,6 @@ export function App({ signInError }: { signInError: string | null }) {
   const [pick, setPick] = useState<"search" | "palette" | null>(null);
   // A folder the user opened that has no analysis.json yet: ask which project it analyzes.
   const [addingArtifact, setAddingArtifact] = useState(false);
-  const [cacheVersionFor, setCacheVersionFor] = useState<string | null>(null);
   const [sandbox, setSandbox] = useState<Sandbox | null>(null);
 
   const [index, indexError] = useAsync(loadIndex, [useCatalogVersion()]);
@@ -137,8 +138,17 @@ export function App({ signInError }: { signInError: string | null }) {
   const base = route.base ?? (baseArtifact ? baseVersions[0]?.id : fallbackPair.base);
   const head = route.head ?? fallbackPair.head;
   // Analyze (desktop, in a project folder): pick the two things to compare; it writes them up as a note.
-  const [picking, setPicking] = useState(false);
-  useCommand("analyze", () => setPicking(true), location?.kind === "local");
+  // The pair it starts from: what's on screen, or an artifact picked in the sidebar.
+  const [picking, setPicking] = useState<Pair | null>(null);
+  const [managingEngines, setManagingEngines] = useState(false);
+  // Bumped when the engines manager closes, so Analyze lists what was installed or removed there.
+  const [enginesChanged, setEnginesChanged] = useState(0);
+  useNoDefaultContextMenu(IS_DESKTOP);
+  const shownPair = (): Pair => ({
+    before: { artifact: baseArtifact?.name ?? artifact?.name ?? "", version: base ?? "" },
+    after: { artifact: artifact?.name ?? "", version: head ?? "" },
+  });
+  useCommand("analyze", () => setPicking(shownPair()), location?.kind === "local");
   const connect = __IAM__ ? connectGitHub : () => setAccountOpen(true);
 
   /** Analyze: show the user's repo here and analyze it locally, in the desktop app. */
@@ -165,15 +175,13 @@ export function App({ signInError }: { signInError: string | null }) {
       setBanner(String(e));
     }
   };
-  /** Desktop: add another version (a file/folder) to a file artifact, then show it as head. */
-  const addVersion = async (artifactName: string) => {
+  /** Desktop: remove an artifact (and its copies); stop showing it if it's on screen. */
+  const removeArtifactNamed = async (name: string) => {
     if (location?.kind !== "local") return;
-    const path = await pickFile("Add a version (file or folder)");
-    if (!path) return;
     try {
-      const version = await addFileVersion(location.path, artifactName, path);
+      await removeArtifact(location.path, name);
       reloadCatalog();
-      navigate({ artifact: artifactName, head: version });
+      if (name === artifact?.name || name === baseArtifact?.name) navigate({ artifact: null, base: null, head: null });
     } catch (e) {
       setBanner(String(e));
     }
@@ -189,6 +197,7 @@ export function App({ signInError }: { signInError: string | null }) {
       { label: "Open folder as a project…", run: openFolder, when: IS_DESKTOP },
       { label: "Search this analysis…", hint: keyLabel("k"), run: () => setPick("search"), when: Boolean(location) },
       { label: "Analyze", run: () => runCommand("analyze"), when: hasCommand("analyze") },
+      { label: "Analysis engines…", run: () => setManagingEngines(true), when: IS_DESKTOP },
       { label: "Get a copy", run: () => runCommand("get-copy"), when: hasCommand("get-copy") },
       { label: "Show the notes", run: () => navigate({ file: null }), when: Boolean(location && route.file) },
       { label: "Switch repository…", run: () => runCommand("repositories"), when: hasCommand("repositories") },
@@ -211,24 +220,10 @@ export function App({ signInError }: { signInError: string | null }) {
       <div className="app embed">
         {projectError ? (
           <BlankSlate icon={<DiffIcon size={32} className="big-icon" />} title={`${route.project} isn't tracked`} />
-        ) : !project ? (
+        ) : !project || (!repos && !reposError) ? (
           <Spinner />
         ) : (
-          <Analysis
-            project={project}
-            repos={repos}
-            location={location}
-            error={reposError}
-            file={route.file}
-            line={route.line}
-            onFile={(file) => navigate({ file })}
-            compact
-            action={
-              <a className="btn embed-open" href={urlFor({ embed: false })} target="_blank" rel="noreferrer">
-                {INSTANCE.icon} View on {INSTANCE.name}
-              </a>
-            }
-          />
+          <NoteEmbed project={project} repo={repo} path={route.path} />
         )}
       </div>
     );
@@ -245,20 +240,10 @@ export function App({ signInError }: { signInError: string | null }) {
         location={location}
         repo={repo}
         artifacts={artifacts}
-        artifact={artifact}
-        baseArtifact={baseArtifact}
-        versions={versions}
-        baseVersions={baseVersions}
-        base={base}
-        head={head}
-        onArtifact={(name) => navigate({ artifact: name })}
-        onPair={(b, h) => navigate({ base: b, head: h })}
         onAddArtifact={() => setAddingArtifact(true)}
-        onAddVersion={addVersion}
-        onAddCacheVersion={setCacheVersionFor}
+        onRemoveArtifact={removeArtifactNamed}
         onConnectSandbox={setSandbox}
         upstream={upstream}
-        file={route.file}
         viewer={viewer}
         onPick={(id) => navigate({ project: id, repo: null, file: null })}
         onRepo={(fullName) => navigate({ repo: fullName, file: null })}
@@ -301,26 +286,12 @@ export function App({ signInError }: { signInError: string | null }) {
           onPath={(path) => navigate({ path })}
           onArtifact={(name) => navigate({ artifact: name })}
           onAddArtifact={() => setAddingArtifact(true)}
+          onAnalyzeAt={(place) => setPicking(pairFrom(artifacts, place))}
+          onRemoveArtifact={removeArtifactNamed}
           baseArtifact={baseArtifact?.name}
           action={
-            <>
-              {/* A published analysis: get your own copy (on GitHub, then in the desktop app). A project folder:
-                  analyze a change in it, into a note there. */}
-              {location?.kind === "local" ? (
-                <button
-                  className="btn primary analyze"
-                  onClick={(e) => {
-                    e.stopPropagation(); // it sits in the project header, which toggles on click
-                    setPicking(true);
-                  }}
-                  title="Compare two versions and write up what the change was about"
-                >
-                  Analyze
-                </button>
-              ) : (
-                <AnalyzeButton project={project} repos={repos} upstream={upstream} viewer={viewer} onConnect={connect} onOpen={openRepo} />
-              )}
-            </>
+            // A published analysis: get your own copy (on GitHub, then in the desktop app).
+            <AnalyzeButton project={project} repos={repos} upstream={upstream} viewer={viewer} onConnect={connect} onOpen={openRepo} />
           }
         />
       )}
@@ -343,37 +314,38 @@ export function App({ signInError }: { signInError: string | null }) {
           onClose={() => setAddingArtifact(false)}
         />
       )}
-      {cacheVersionFor && location?.kind === "local" && (
-        <AddCacheVersion
-          project={location.path}
-          artifact={cacheVersionFor}
-          onDone={(version) => {
-            const name = cacheVersionFor;
-            setCacheVersionFor(null);
-            reloadCatalog();
-            navigate({ artifact: name, head: version });
-          }}
-          onClose={() => setCacheVersionFor(null)}
-        />
-      )}
+      <ContextMenuHost />
       {sandbox && <VncViewer sandbox={sandbox} onClose={() => setSandbox(null)} />}
       {picking && location?.kind === "local" && (
         <AnalyzeDialog
           project={location.path}
           artifacts={artifacts}
-          initial={{
-            before: { artifact: baseArtifact?.name ?? artifact?.name ?? "", version: base ?? "" },
-            after: { artifact: artifact?.name ?? "", version: head ?? "" },
-          }}
-          onClose={() => setPicking(false)}
-          onAnalyze={async (before, after) => {
-            // Diff the pair, predict what it was about, and write that up as a note, then show the note.
-            const baseArtifact = before.artifact === after.artifact ? null : before.artifact;
-            const content = await loadAnalysis(location, after.artifact, before.version, after.version, baseArtifact);
-            const note = await createNote(location.path, reportName(content), reportNote(content, await analyzeChange(content)));
-            setPicking(false);
+          initial={picking}
+          onClose={() => setPicking(null)}
+          enginesChanged={enginesChanged}
+          onManageEngines={() => setManagingEngines(true)}
+          onAnalyze={async (pair, engine) => {
+            // The engine analyzes the pair; its diffmd becomes a note in the project, shown with the pair's diff.
+            const note = await createNote(location.path, noteName(pair), await analyzeWith(engine, location, artifacts, pair));
+            const { before, after } = pair;
+            setPicking(null);
             reloadCatalog();
-            navigate({ artifact: after.artifact, baseArtifact, base: before.version, head: after.version, path: note });
+            navigate({
+              artifact: after.artifact,
+              baseArtifact: before.artifact === after.artifact ? null : before.artifact,
+              base: before.version,
+              head: after.version,
+              path: note,
+            });
+          }}
+        />
+      )}
+      {/* After Analyze's dialog, so it opens on top of it. */}
+      {managingEngines && (
+        <EnginesDialog
+          onClose={() => {
+            setManagingEngines(false);
+            setEnginesChanged((n) => n + 1);
           }}
         />
       )}

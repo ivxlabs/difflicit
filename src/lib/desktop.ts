@@ -63,10 +63,11 @@ export const localAnalysis = (path: string) =>
     artifacts: import("../types").Artifact[] | null;
     notes_path: string | null;
     notes_html: string | null;
+    notes_files: string[];
     patches: { path: string; text: string }[];
   }>("local_analysis", { path });
 
-/** Desktop: what to show for a file or folder picked in the project tree (path relative to the project). */
+/** Desktop: what to show for a file or folder in a project (path relative to the project). */
 export const fileInfo = (project: string, path: string) => invoke<import("../types").FileInfo>("file_info", { project, path });
 
 /**
@@ -78,8 +79,17 @@ export const createNote = (project: string, name?: string, text?: string) => inv
 /** Desktop: save a note (a .diffmd or .md file in the project). */
 export const writeNote = (project: string, path: string, text: string) => invoke<void>("write_note", { project, path, text });
 
+/** Desktop: rename a note in its folder (the extension stays unless given); returns its new path. */
+export const renameNote = (project: string, path: string, name: string) => invoke<string>("rename_note", { project, path, name });
+
 /** Desktop: Markdown to HTML, exactly as saved notes are rendered (a note's blocks, one at a time). */
 export const renderMarkdown = (text: string) => invoke<string>("render_markdown", { text });
+
+/** Files the OS may open from here (capabilities/default.json allows only these): never a binary, which it'd run. */
+export const canOpenFile = (path: string) => /\.(diffmd|md|markdown|txt|json|diff|patch)$/i.test(path);
+
+/** What the file manager is called here, for "Reveal in …". */
+export const FILE_MANAGER = /Mac/.test(navigator.platform) ? "Finder" : /Win/.test(navigator.platform) ? "Explorer" : "file manager";
 
 /** Desktop: open a file in its default app (an editor, for notes). */
 export const openFile = (path: string) => void import("@tauri-apps/plugin-opener").then(({ openPath }) => openPath(path));
@@ -91,12 +101,34 @@ export const initProject = (path: string) => invoke<void>("init_project", { path
 export const addGitArtifact = (project: string, source: string, token?: string) =>
   invoke<string>("add_git_artifact", { project, source, token });
 
-/** Desktop: add a file or folder as a new artifact (its first version). Returns { name, version }. */
+/**
+ * Desktop: add a file or folder as an artifact, or as another version of the file artifact already named like it.
+ * Returns { name, version }.
+ */
 export const addFileArtifact = (project: string, path: string) => invoke<{ name: string; version: string }>("add_file_artifact", { project, path });
 
-/** Desktop: add another version (file or folder) to an existing file artifact. Returns the version id. */
-export const addFileVersion = (project: string, artifact: string, path: string) =>
-  invoke<string>("add_file_version", { project, artifact, path });
+/** An analysis engine as Difflicit finds it: a command, and what its `--about` says (protocol:
+ * https://ivx.run/docs/difflicit/engines/). */
+export interface EngineInfo {
+  command: string;
+  name: string;
+  installed: boolean;
+  version?: string;
+  description?: string;
+  license?: string;
+  homepage?: string;
+  /** Installed, but it can't be used (why). */
+  problem?: string;
+}
+
+/** Desktop: each command as an analysis engine (installed or not, and what it is). */
+export const listEngines = (commands: string[]) => invoke<EngineInfo[]>("list_engines", { commands });
+/** Desktop: analyze `base` (of `baseArtifact`, else `artifact`) → `head` with an engine; its diffmd. */
+export const runEngine = (command: string, project: string, artifact: Artifact, base: string, head: string, baseArtifact?: Artifact) =>
+  invoke<string>("run_engine", { command, project, artifact, base, head, baseArtifact });
+
+/** Desktop: remove an artifact from the project, with its copies in `artifacts/<name>`. */
+export const removeArtifact = (project: string, name: string) => invoke<void>("remove_artifact", { project, name });
 
 /** Desktop: a git artifact's versions — its tags and recent commits. */
 export const gitVersions = (project: string, repo: string) =>
@@ -144,13 +176,10 @@ export const dscCaches = () => invoke<Cache[]>("dsc_caches");
 /** Desktop: the images (dylibs) inside a cache, with versions. */
 export const dscImages = (cache: string) => invoke<Image[]>("dsc_images", { cache });
 
-/** Desktop: extract an image from a cache as a new file artifact (first version). */
+/** Desktop: extract an image from a cache as a file artifact (or another version of the one named like it). */
 export const addDscArtifact = (project: string, cache: string, image: string, label?: string) =>
   invoke<{ name: string; version: string }>("add_dsc_artifact", { project, cache, image, label });
 
-/** Desktop: add another version to a file artifact by extracting an image from (another) cache. */
-export const addDscVersion = (project: string, artifact: string, cache: string, image: string, label?: string) =>
-  invoke<string>("add_dsc_version", { project, artifact, cache, image, label });
 
 /** Desktop: pull the dyld_shared_cache(s) out of an IPSW/OTA file. Returns the caches on disk. */
 export const extractCacheFromIpsw = (path: string) => invoke<Cache[]>("extract_cache_from_ipsw", { path });
@@ -163,8 +192,6 @@ export const downloadIpsw = (device: string, build?: string, version?: string) =
 export const dscDiff = (base: string, head: string) =>
   invoke<{ added: string[]; removed: string[]; changed: { name?: string; previous?: string; version?: string }[] }>("dsc_diff", { base, head });
 
-/** Desktop: a folder's immediate children (folders first), for the project file tree. */
-export const listDir = (path: string) => invoke<{ name: string; path: string; dir: boolean }[]>("list_dir", { path });
 
 /** Desktop: installed binaries to pick as a file artifact — native apps, and libraries on disk. */
 export const installedBinaries = () =>

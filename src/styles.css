@@ -494,6 +494,47 @@ code,
   direction: rtl;
   text-align: left;
 }
+/* The sidebar's sections (Artifacts, Notes), and what's in them, indented beneath. Artifacts takes the room it
+   needs (up to half), Notes and the diff's files the rest. */
+.sidebar-section.artifacts-section {
+  flex: none;
+  max-height: 45%;
+  border-bottom: 1px solid var(--border);
+}
+.list-item.section-head .title {
+  font-weight: 600;
+}
+.list-item.sub-item {
+  padding-left: 26px;
+}
+.list-item.sub-item .chevron {
+  flex: none;
+  width: 16px;
+  margin-left: -18px;
+  padding: 0;
+  justify-content: center;
+}
+.list-item.renaming {
+  cursor: default;
+}
+.rename-input {
+  width: 100%;
+  padding: 1px 6px;
+  font-size: 12px;
+}
+.list-item .error-text {
+  color: var(--del-fg);
+  white-space: normal;
+}
+.list-item.version-item {
+  padding-left: 48px;
+}
+
+/* Takes the row's spare room (in a flex row), pushing what follows to the end. */
+.grow {
+  flex: 1;
+  min-width: 0;
+}
 
 .muted {
   color: var(--text-secondary);
@@ -967,10 +1008,6 @@ button.sidebar-header.repo-link {
   white-space: nowrap;
 }
 
-/* Project file tree: the folder header toggles it, each folder expands lazily. */
-.sidebar-header.tree-root {
-  cursor: pointer;
-}
 .icon-link {
   display: inline-flex;
   border: 0;
@@ -984,22 +1021,11 @@ button.sidebar-header.repo-link {
   color: var(--text);
   background: var(--bg-alt);
 }
-.sidebar-section.tree {
-  flex: none;
-  max-height: 45%;
-  border-bottom: 1px solid var(--border);
-}
-.tree-node .tree-name {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  direction: ltr;
-  text-align: left;
-}
 .tree-folder-icon {
   color: var(--accent);
+}
+.list-item.selected .tree-folder-icon {
+  color: inherit;
 }
 .sidebar-note {
   padding: 8px 10px;
@@ -1162,15 +1188,6 @@ button.sidebar-header.repo-link {
 
 /* ----------------------------------------------------------------- analyze */
 
-.btn.analyze {
-  flex: none;
-  margin-left: auto;
-  padding: 7px 26px;
-  font-size: 14px;
-  font-weight: 700;
-  letter-spacing: 0.02em;
-  border-radius: 6px;
-}
 .choice {
   display: flex;
   gap: 8px;
@@ -1200,35 +1217,31 @@ button.sidebar-header.repo-link {
 .app.embed {
   grid-template-rows: 1fr;
 }
-.app.embed .body {
-  grid-template-columns: 220px 1fr;
+/* Just the note: a slim header linking to the whole project, then the note, scrolling. */
+.note-embed {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
 }
-/* No analysis repository: nothing to list, so give the space to the message. */
-.app.embed .body:has(> .sidebar:empty) {
-  grid-template-columns: 1fr;
+.note-embed-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-secondary);
+  flex: none;
 }
-.app.embed .sidebar:empty {
-  display: none;
+.note-embed .markdown {
+  max-width: none;
 }
 .btn.embed-open {
   flex: none;
-  margin-left: auto;
   color: var(--text);
 }
 .btn.embed-open:hover {
   text-decoration: none;
-}
-/* Narrow embeds (an article column) show just the chosen file or notes. */
-@media (max-width: 640px) {
-  .app.embed .body {
-    grid-template-columns: 1fr;
-  }
-  .app.embed .sidebar {
-    display: none;
-  }
-  .app.embed .project-header-bar .summary {
-    display: none;
-  }
 }
 
 /* ----------------------------------------------------------------- quick pick (⌘K search, ⌘P commands) */
@@ -1445,29 +1458,17 @@ button.sidebar-header.repo-link {
   opacity: 0.55;
 }
 
-/* ----------------------------------------------------------------- artifacts picker */
+/* ----------------------------------------------------------------- artifacts menu */
 
 .artifacts-menu {
   min-width: 320px;
 }
-.artifacts-pair {
-  display: flex;
-  align-items: flex-end;
-  gap: 8px;
-  padding: 10px;
-  border-bottom: 1px solid var(--border);
+/* Not a picker: just the artifacts, each removable. */
+.artifact-item {
+  cursor: default;
 }
-.artifacts-pair label {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  font-size: 11px;
-  color: var(--text-secondary);
-}
-.artifacts-pair .select {
-  width: 100%;
+.artifact-item .btn.danger {
+  padding: 2px 10px;
 }
 .artifacts-menu > .btn {
   margin: 8px 10px;
@@ -1601,7 +1602,7 @@ button.sidebar-header.repo-link {
   white-space: pre-wrap;
 }
 
-/* A file or folder picked in the project tree. */
+/* A file or folder picked in the sidebar (an artifact, a version, a note), or opened from one. */
 .file-info {
   flex: 1;
   overflow-y: auto;
@@ -1797,4 +1798,105 @@ button.link:hover {
 .analyze-side-label {
   font-weight: 600;
   font-size: 12px;
+}
+
+/* ----------------------------------------------------------------- right-click menu */
+
+.context-menu {
+  position: fixed;
+  z-index: 200;
+  min-width: 200px;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  font-size: 13px;
+}
+.context-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px 5px 6px;
+  border: 0;
+  border-radius: 5px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  white-space: nowrap;
+  cursor: default;
+}
+.context-menu-item:hover,
+.context-menu-item:focus-visible {
+  background: var(--accent);
+  color: var(--accent-text);
+  outline: none;
+}
+.context-menu-item.danger {
+  color: var(--del-fg);
+}
+.context-menu-item.danger:hover {
+  background: var(--del-fg);
+  color: #fff;
+}
+.context-menu-icon {
+  display: inline-flex;
+  width: 16px;
+  justify-content: center;
+  flex: none;
+}
+.context-menu-separator {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--border);
+}
+
+/* ----------------------------------------------------------------- analysis engines */
+
+.analyze-engine {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+.analyze-engine .field {
+  flex: 1;
+  min-width: 0;
+}
+.engines-dialog {
+  width: min(640px, 92vw);
+}
+.engines-list {
+  display: flex;
+  flex-direction: column;
+  margin: 8px 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.engine-row {
+  cursor: default;
+}
+.engine-row:last-child {
+  border-bottom: none;
+}
+.engine-row .pill {
+  margin-left: 6px;
+}
+.engine-row .sub {
+  white-space: normal;
+}
+.engine-command {
+  margin-left: 6px;
+  font-size: 11px;
+}
+.list-item.engine-row.dim .title b {
+  opacity: 0.6;
+}
+.engine-add {
+  display: flex;
+  gap: 8px;
 }

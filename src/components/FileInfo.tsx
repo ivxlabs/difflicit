@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 import { AlertIcon, CpuIcon, FileDirectoryFillIcon, FileIcon, GitCommitIcon, LinkExternalIcon, NoteIcon } from "@primer/octicons-react";
-import { fileInfo, openFile, revealFolder } from "../lib/desktop";
+import type { ArtifactPlace } from "../lib/analysis";
+import { canOpenFile, fileInfo, openFile, revealFolder } from "../lib/desktop";
 import { useAsync } from "../lib/util";
 import type { FileInfo as Info } from "../types";
 import { BlankSlate, DocsLink, Spinner } from "./BlankSlate";
@@ -29,8 +30,6 @@ const KEY_FACTS: [string, string][] = [
   ["nx", "NX"],
   ["canary", "Stack canary"],
 ];
-/** Files the OS may open from here (capabilities/default.json allows only these): never a binary, which it'd run. */
-const OPENABLE = /\.(diffmd|md|markdown|txt|json|diff|patch)$/i;
 
 interface Props {
   /** The project folder, and the picked entry's path in it. */
@@ -43,10 +42,13 @@ interface Props {
   onNotes: () => void;
   /** After a note's block is saved. */
   onSaved: () => void;
+  /** The artifact the entry is (or is in), which offers Analyze starting from it. */
+  artifactPlace: ArtifactPlace | null;
+  onAnalyze: (place: ArtifactPlace) => void;
 }
 
-/** Desktop: what a file or folder picked in the project tree is — the main area's view of it. */
-export function FileInfo({ project, path, reads, onPath, onArtifact, onNotes, onSaved }: Props) {
+/** Desktop: what a file or folder in the project is — the main area's view of it. */
+export function FileInfo({ project, path, reads, onPath, onArtifact, onNotes, onSaved, artifactPlace, onAnalyze }: Props) {
   // Read again on `reads`, keeping it on screen meanwhile (a note being edited stays open).
   const [info, error] = useAsync(() => fileInfo(project, path), [project, path], [reads]);
   if (error) {
@@ -71,9 +73,18 @@ export function FileInfo({ project, path, reads, onPath, onArtifact, onNotes, on
             {info.modified && ` · modified ${new Date(info.modified).toLocaleString()}`}
           </div>
         </div>
-        {info.kind !== "dir" && OPENABLE.test(path) && (
+        {info.kind !== "dir" && canOpenFile(path) && (
           <button className="btn" onClick={() => openFile(abs)}>
             Open
+          </button>
+        )}
+        {artifactPlace && (
+          <button
+            className="btn primary"
+            onClick={() => onAnalyze(artifactPlace)}
+            title={`Compare ${artifactPlace.artifact}${artifactPlace.version ? ` ${artifactPlace.version}` : ""} with another version`}
+          >
+            Analyze
           </button>
         )}
         <button className="btn" onClick={() => revealFolder(abs)} title="Show in the file manager">

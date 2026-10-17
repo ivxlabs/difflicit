@@ -175,23 +175,6 @@ pub async fn add_dsc_artifact(project: String, cache: String, image: String, lab
     done
 }
 
-/// Add another version to a file artifact by extracting an image from (another) cache. Returns the version id.
-#[tauri::command]
-pub async fn add_dsc_version(project: String, artifact: String, cache: String, image: String, label: Option<String>) -> Result<String, String> {
-    let dir = PathBuf::from(&project);
-    let base = safe_name(basename(&image)).ok_or_else(|| format!("Couldn't name a version from {image:?}."))?;
-    let scratch = scratch("dsc");
-    let done = (|| {
-        let extracted = extract_image_to(&cache, &image, &scratch)?;
-        let mut body = read_project(&dir);
-        let version = add_version(&dir, &mut body, &artifact, &safe_label(label.as_deref().unwrap_or(""), &base), &extracted)?;
-        write_project(&dir, &body)?;
-        Ok(version)
-    })();
-    let _ = std::fs::remove_dir_all(&scratch);
-    done
-}
-
 /// Extract the dyld_shared_cache(s) from an IPSW/OTA file into the shared workspace. Returns the caches on disk.
 #[tauri::command]
 pub async fn extract_cache_from_ipsw(path: String) -> Result<Vec<Value>, String> {
@@ -249,9 +232,8 @@ pub async fn dsc_diff(base: String, head: String) -> Result<Value, String> {
     serde_json::from_str(&out).map_err(|e| format!("Couldn't read ipsw output: {e}"))
 }
 
-/// A folder's immediate children, for the project file tree in the sidebar (expanded lazily, one level at a
-/// time). Folders first, then files, each alphabetical; dotfiles (.git, …) are hidden.
-#[tauri::command]
+/// A folder's immediate children, for a folder's view in the main area. Folders first, then files, each
+/// alphabetical; dotfiles (.git, …) are hidden.
 pub fn list_dir(path: String) -> Result<Vec<Value>, String> {
     let mut entries: Vec<Value> = std::fs::read_dir(&path)
         .map_err(|e| format!("Couldn't read {path}: {e}"))?
@@ -542,7 +524,12 @@ fn add_file(dir: &Path, name: &str, version: &str, src: &Path, image: Option<&st
     let mut body = read_project(dir);
     let grouped = artifacts_of(&body).iter().any(|a| artifact_name(a) == name && a.get("kind").and_then(Value::as_str) == Some("file"));
     let (name, version) = if grouped {
-        (name.to_string(), add_version(dir, &mut body, name, version, src)?)
+        let arts = body.get_mut("artifacts").and_then(Value::as_array_mut).ok_or("no artifacts")?;
+        let a = arts.iter_mut().find(|a| artifact_name(a) == name).ok_or_else(|| format!("No artifact {name:?}."))?;
+        let version = unique_version(a, version);
+        let rel = copy_in(dir, name, &version, src)?;
+        a["versions"].as_array_mut().ok_or_else(|| format!("{name} has no versions list."))?.push(json!({ "id": version, "path": rel }));
+        (name.to_string(), version)
     } else {
         let name = unique_name(&body, name);
         let rel = copy_in(dir, &name, version, src)?;
@@ -557,30 +544,26 @@ fn add_file(dir: &Path, name: &str, version: &str, src: &Path, image: Option<&st
     Ok(json!({ "name": name, "version": version }))
 }
 
-/// Copy `src` in as another version of the file artifact `artifact` (in `body`, which the caller writes); returns
-/// its version id, `version` made unique.
-fn add_version(dir: &Path, body: &mut Value, artifact: &str, version: &str, src: &Path) -> Result<String, String> {
-    let arts = body.get_mut("artifacts").and_then(Value::as_array_mut).ok_or("no artifacts")?;
-    let a = arts.iter_mut().find(|a| artifact_name(a) == artifact).ok_or_else(|| format!("No artifact {artifact:?}."))?;
-    let version = unique_version(a, version);
-    let rel = copy_in(dir, artifact, &version, src)?;
-    a["versions"].as_array_mut().ok_or_else(|| format!("{artifact} isn't a file artifact."))?.push(json!({ "id": version, "path": rel }));
-    Ok(version)
-}
 
-/// Add another version (a file or folder) to an existing file artifact. Returns the version id.
+/// Remove an artifact from the project, with its copies in `artifacts/<name>` (a git artifact's clone, a file
+/// artifact's versions). Anything it points to outside that folder is left alone.
 #[tauri::command]
-pub async fn add_file_version(project: String, artifact: String, path: String) -> Result<String, String> {
+pub fn remove_artifact(project: String, name: String) -> Result<(), String> {
     let dir = PathBuf::from(&project);
-    let src = PathBuf::from(&path);
-    if !src.exists() {
-        return Err(format!("{path} doesn't exist."));
-    }
+    let name = safe_name(&name).ok_or_else(|| format!("No artifact {name:?}."))?;
     let mut body = read_project(&dir);
-    let base = safe_name(basename(&path)).ok_or_else(|| format!("Couldn't name a version from {path:?}."))?;
-    let version = add_version(&dir, &mut body, &artifact, &base, &src)?;
+    let arts = body.get_mut("artifacts").and_then(Value::as_array_mut).ok_or_else(|| format!("No artifact {name:?}."))?;
+    let before = arts.len();
+    arts.retain(|a| artifact_name(a) != name);
+    if arts.len() == before {
+        return Err(format!("No artifact {name:?}."));
+    }
     write_project(&dir, &body)?;
-    Ok(version)
+    let copies = dir.join("artifacts").join(&name);
+    if copies.is_dir() {
+        std::fs::remove_dir_all(&copies).map_err(|e| format!("Removed {name} from the project, but not its files: {e}"))?;
+    }
+    Ok(())
 }
 
 /// Make `base` unique among an artifact's existing version ids.
@@ -617,13 +600,13 @@ fn append_artifact(body: &mut Value, artifact: Value) {
 
 // ── Diffing two versions of an artifact ──────────────────────────────────────
 
-fn resolve(dir: &Path, p: &str) -> PathBuf {
+pub(crate) fn resolve(dir: &Path, p: &str) -> PathBuf {
     let p = PathBuf::from(p);
     if p.is_absolute() { p } else { dir.join(p) }
 }
 
 /// The path of a file artifact's version.
-fn version_path(dir: &Path, artifact: &Value, id: &str) -> Result<PathBuf, String> {
+pub(crate) fn version_path(dir: &Path, artifact: &Value, id: &str) -> Result<PathBuf, String> {
     artifact
         .get("versions")
         .and_then(Value::as_array)
@@ -640,13 +623,42 @@ pub(crate) fn is_binary_file(path: &Path) -> bool {
     std::fs::File::open(path).and_then(|f| f.take(8192).read_to_end(&mut head)).is_ok() && head.contains(&0)
 }
 
-fn no_index(a: &Path, b: &Path) -> Result<String, String> {
-    run_ok(
-        "git",
-        &["diff", "--no-color", "--no-index", "--", a.to_str().ok_or("bad path")?, b.to_str().ok_or("bad path")?],
-        &[1],
-        "Install Git and try again.",
-    )
+/// `git diff --no-index` of two files or folders, with paths as people read them. git names files by the full
+/// path it was given (`a/Users/…/artifacts/lib/1.0/src/x.c`), so every file of two versions would look renamed;
+/// instead a folder's files are named inside it (`a/src/x.c` → `b/src/x.c`), and two files by `name`.
+fn no_index(a: &Path, b: &Path, name: &str) -> Result<String, String> {
+    let (sa, sb) = (a.to_str().ok_or("bad path")?, b.to_str().ok_or("bad path")?);
+    let text = run_ok("git", &["diff", "--no-color", "--no-index", "--", sa, sb], &[1], "Install Git and try again.")?;
+    // As git prints them: without a leading slash (and with / on Windows too).
+    let (pa, pb) = (sa.replace('\\', "/").trim_start_matches('/').to_string(), sb.replace('\\', "/").trim_start_matches('/').to_string());
+    let rename = |line: &str| -> String {
+        if a.is_dir() {
+            let mut line = line.to_string();
+            // An added or deleted file is named under the other folder on both sides.
+            for p in [&pa, &pb] {
+                line = line.replace(&format!("a/{p}/"), "a/").replace(&format!("b/{p}/"), "b/");
+            }
+            line
+        } else {
+            line.replace(&format!("a/{pa}"), &format!("a/{name}")).replace(&format!("b/{pb}"), &format!("b/{name}"))
+        }
+    };
+    let headers = ["diff --git ", "--- ", "+++ "];
+    let mut in_hunk = false;
+    Ok(text
+        .lines()
+        .map(|line| {
+            // Only the headers carry paths; a hunk's "--- " line is a removed line that happens to start that way.
+            if line.starts_with("diff --git ") {
+                in_hunk = false;
+            } else if line.starts_with("@@") {
+                in_hunk = true;
+            }
+            if !in_hunk && headers.iter().any(|h| line.starts_with(h)) { rename(line) } else { line.to_string() }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n")
 }
 
 /// The files to compare: `base` of `base_artifact` (or of `artifact`) and `head` of `artifact`. Two versions of one
@@ -674,7 +686,8 @@ pub async fn artifact_diff(project: String, artifact: Value, base: String, head:
     if is_binary_file(&b) && is_binary_file(&h) {
         return Ok(json!({ "kind": "binary", "functions": radiff(&b, &h)? }));
     }
-    Ok(json!({ "kind": "unified", "text": no_index(&b, &h)? }))
+    let name = artifact.get("name").and_then(Value::as_str).unwrap_or("file");
+    Ok(json!({ "kind": "unified", "text": no_index(&b, &h, name)? }))
 }
 
 // ── Binaries (radare2) ───────────────────────────────────────────────────────
@@ -789,6 +802,24 @@ mod tests {
     }
 
     #[test]
+    fn folder_diffs_name_files_inside() {
+        let dir = scratch("folders");
+        let (v1, v2) = (dir.join("v1"), dir.join("v2"));
+        std::fs::create_dir_all(v1.join("src")).unwrap();
+        std::fs::create_dir_all(v2.join("src")).unwrap();
+        std::fs::write(v1.join("src/x.c"), "-- one\n").unwrap();
+        std::fs::write(v2.join("src/x.c"), "-- two\n").unwrap();
+        std::fs::write(v2.join("new.c"), "new\n").unwrap();
+        let text = no_index(&v1, &v2, "lib").unwrap();
+        assert!(text.contains("diff --git a/src/x.c b/src/x.c\n"), "{text}");
+        assert!(text.contains("--- a/src/x.c\n+++ b/src/x.c\n"), "{text}");
+        assert!(text.contains("diff --git a/new.c b/new.c\n--- /dev/null\n+++ b/new.c\n") || text.contains("+++ b/new.c\n"), "{text}");
+        // A removed line that looks like a header is left alone.
+        assert!(text.contains("\n--- one\n"), "{text}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn file_artifact_and_diff() {
         let dir = scratch("proj");
         std::fs::create_dir_all(&dir).unwrap();
@@ -801,20 +832,22 @@ mod tests {
         let name = added["name"].as_str().unwrap().to_string();
         let v1 = added["version"].as_str().unwrap().to_string();
 
-        let b = dir.join("newer.txt");
+        // A newer copy of the same file (same name) is another version of its artifact, not a second artifact.
+        let b = dir.join("newer").join(a.file_name().unwrap());
+        std::fs::create_dir_all(b.parent().unwrap()).unwrap();
         std::fs::write(&b, "one\ntwo\nthree\n").unwrap();
-        let v2 = tauri::async_runtime::block_on(add_file_version(p.clone(), name.clone(), b.to_string_lossy().into())).unwrap();
-
-        // The same file added again is another version of its artifact, not a second artifact.
-        let again = tauri::async_runtime::block_on(add_file_artifact(p.clone(), a.to_string_lossy().into())).unwrap();
+        let again = tauri::async_runtime::block_on(add_file_artifact(p.clone(), b.to_string_lossy().into())).unwrap();
         assert_eq!(again["name"].as_str(), Some(name.as_str()));
+        let v2 = again["version"].as_str().unwrap().to_string();
+        assert_ne!(v1, v2);
         assert_eq!(read_project(&dir)["artifacts"].as_array().unwrap().len(), 1);
-        assert_eq!(read_project(&dir)["artifacts"][0]["versions"].as_array().unwrap().len(), 3);
 
         let artifact = read_project(&dir)["artifacts"][0].clone();
         let out = tauri::async_runtime::block_on(artifact_diff(p.clone(), artifact.clone(), v1.clone(), v2.clone(), None)).unwrap();
         assert_eq!(out["kind"], "unified");
         assert!(out["text"].as_str().unwrap().contains("+three"));
+        // Named after the artifact, not by where the two copies are.
+        assert!(out["text"].as_str().unwrap().contains(&format!("--- a/{name}\n+++ b/{name}\n")));
 
         // Across artifacts: v1 of the first against another file artifact's version.
         let c = dir.join("other.txt");
@@ -827,6 +860,12 @@ mod tests {
         // A git repository against another artifact is refused, not guessed at.
         let git_like = json!({ "name": "g", "kind": "git", "repo": "artifacts/g" });
         assert!(pair_paths(&dir, &git_like, Some(&arts[0]), &v1, "HEAD").is_err());
+
+        // Removing an artifact drops it and its copies, nothing else.
+        remove_artifact(p.clone(), name.clone()).unwrap();
+        assert_eq!(read_project(&dir)["artifacts"].as_array().unwrap().len(), 1);
+        assert!(!dir.join("artifacts").join(&name).exists());
+        assert!(remove_artifact(p.clone(), name.clone()).is_err());
         std::fs::remove_dir_all(&dir).unwrap();
         let _ = std::fs::remove_file(&a);
     }

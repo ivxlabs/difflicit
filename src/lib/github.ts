@@ -155,8 +155,11 @@ async function fetchContent(repo: Repo, maxPatches = 30): Promise<RepoContent> {
     // not valid JSON: no artifacts, default notes
   }
 
-  const paths = (tree?.tree ?? [])
-    .filter((i) => i.type === "blob" && /\.(diff|patch)$/i.test(i.path) && (i.size ?? 0) < 2_000_000)
+  // The repository's own files: artifacts/ holds what's compared, not its patches or notes.
+  const own = (tree?.tree ?? []).filter((i) => i.type === "blob" && !i.path.startsWith("artifacts/"));
+  const notes_files = own.filter((i) => /\.diffmd$/i.test(i.path)).map((i) => i.path);
+  const paths = own
+    .filter((i) => /\.(diff|patch)$/i.test(i.path) && (i.size ?? 0) < 2_000_000)
     .map((i) => i.path)
     .slice(0, maxPatches);
 
@@ -171,11 +174,14 @@ async function fetchContent(repo: Repo, maxPatches = 30): Promise<RepoContent> {
     ),
   ]);
 
-  return { notes_html, files: patches.flat(), artifacts: project.artifacts ?? [] };
+  return { notes_html, notes_path: project.notes ?? null, notes_files, files: patches.flat(), artifacts: project.artifacts ?? [] };
 }
 
-/** The notes, rendered: the file analysis.json's `notes` names (Markdown or diffmd), else the README. */
-async function notesHtml(repo: Repo, notes?: string): Promise<string | null> {
+/**
+ * Notes, rendered: the file `notes` names (Markdown or diffmd; analysis.json's `notes`, or a note being embedded),
+ * else the README.
+ */
+export async function notesHtml(repo: Repo, notes?: string): Promise<string | null> {
   if (notes && !notes.split("/").includes("..")) {
     if (/\.diffmd$/i.test(notes)) {
       // GitHub doesn't render .diffmd files; render the Markdown with its API (the diff blocks are split out later).

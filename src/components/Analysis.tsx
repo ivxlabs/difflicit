@@ -1,18 +1,38 @@
 // SPDX-License-Identifier: GPL-3.0-only
-import { useEffect, useState } from "react";
-import { AlertIcon, BookIcon, ChevronDownIcon, ChevronRightIcon, CpuIcon, FileDiffIcon, FileDirectoryIcon, GitCompareIcon, LinkExternalIcon, NoteIcon, PlusIcon } from "@primer/octicons-react";
-import type { AnalysisContent, BinaryFunction, Location, Project } from "../types";
-import { useCatalogVersion } from "../api";
-import { loadAnalysis, locationId } from "../lib/analysis";
-import { artifactFunctionDiff, openFile, revealFolder } from "../lib/desktop";
+import { useEffect, useRef, useState } from "react";
+import {
+  AlertIcon,
+  BookIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
+  CopyIcon,
+  CpuIcon,
+  EyeIcon,
+  FileDiffIcon,
+  FileDirectoryIcon,
+  FileIcon,
+  GitCommitIcon,
+  GitCompareIcon,
+  LinkExternalIcon,
+  NoteIcon,
+  PackageIcon,
+  PencilIcon,
+  PlusIcon,
+  TrashIcon,
+  TypographyIcon,
+} from "@primer/octicons-react";
+import type { AnalysisContent, Artifact, BinaryFunction, Location, Project } from "../types";
+import { type ArtifactPlace, artifactAt, loadAnalysis, locationId } from "../lib/analysis";
+import { FILE_MANAGER, artifactFunctionDiff, canOpenFile, openFile, renameNote, revealFolder } from "../lib/desktop";
 import { parseUnifiedDiff } from "../lib/diff";
 import { useAsync } from "../lib/util";
 import { BlankSlate, DocsLink, Spinner } from "./BlankSlate";
+import { contextMenu, copyText, type MenuItem } from "./ContextMenu";
 import { DiffView } from "./DiffView";
 import { FileInfo } from "./FileInfo";
 import { FileList } from "./FileList";
-import { FileTree } from "./FileTree";
 import { NewNoteDialog, NoteBlocks } from "./NoteEditor";
+import { PublishedNote } from "./NoteEmbed";
 import { Notes } from "./Notes";
 import { ProjectHeader } from "./ProjectHeader";
 import { Skull } from "./Skull";
@@ -34,31 +54,32 @@ interface Props {
   /** The line to jump to in it (from the URL). */
   line?: number | null;
   onFile: (path: string | null) => void;
-  /** Desktop: the entry picked in the project tree (relative path), shown instead of a diff. */
+  /** Desktop: what's picked in the sidebar (an artifact, a version, a note; relative path), shown instead of a diff. */
   path?: string | null;
   onPath?: (path: string) => void;
   /** Desktop: show an artifact's diff (from the project file's view). */
   onArtifact?: (name: string) => void;
+  /** Desktop: analyze starting from an artifact picked in the sidebar. */
+  onAnalyzeAt?: (place: ArtifactPlace) => void;
+  /** Desktop: remove an artifact (from its right-click menu). */
+  onRemoveArtifact?: (name: string) => void;
   /** Desktop: add an artifact (shown when the project has none). */
   onAddArtifact?: () => void;
-  /** The main action, shown in the project header (Analyze, or "View on …" in embeds). */
+  /** The main action, in the project header a published analysis has (Get a copy). A project folder has no
+   * header: it's on screen in the sidebar, and Analyze is on each artifact. */
   action: React.ReactNode;
-  /** Embedded in another page: project details start collapsed. */
-  compact?: boolean;
 }
 
 /** A project's analysis: the notes, plus the diff — stored patches, two git refs, or two binaries. */
 export function Analysis(props: Props) {
-  const { project, repos, location, error: reposError, artifact, baseArtifact, base, head, file, line = null, onFile, path = null, onPath, onArtifact, onAddArtifact, action, compact } =
+  const { project, repos, location, error: reposError, artifact, baseArtifact, base, head, file, line = null, onFile, path = null, onPath, onArtifact, onAddArtifact, onAnalyzeAt, onRemoveArtifact, action } =
     props;
   // A local analysis is read again whenever the window regains focus: its files were probably just edited.
   const [reads, setReads] = useState(0);
-  const [treeOpen, setTreeOpen] = useState(true);
-  // Desktop: the New note dialog, and a nudge for the tree to re-list.
+  // Desktop: the New note dialog, and the note being renamed in the sidebar (its path) with what went wrong.
   const [newNote, setNewNote] = useState(false);
-  const [treeVersion, setTreeVersion] = useState(0);
-  // The tree also re-lists when the project changes on disk from elsewhere in the app (Analyze writing a note).
-  const catalogVersion = useCatalogVersion();
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const [renameError, setRenameError] = useState<string | null>(null);
   const local = location?.kind === "local";
   useEffect(() => {
     if (!local) return;
@@ -75,6 +96,64 @@ export function Analysis(props: Props) {
   const reread = () => setReads((n) => n + 1);
 
   const files = content?.files ?? [];
+  // Every note in the project (each *.diffmd, and the notes file if it's plain Markdown), its notes first.
+  const notesList = [...new Set([content?.notes_path, ...(content?.notes_files ?? [])].filter((n): n is string => Boolean(n)))];
+  const showingNotes = file === null && !path;
+
+  /** Rename a note to `name` (from the sidebar); what's on screen follows it. False when it couldn't. */
+  const rename = async (note: string, name: string) => {
+    if (location?.kind !== "local") return false;
+    try {
+      const renamed = await renameNote(location.path, note, name);
+      setRenaming(null);
+      setRenameError(null);
+      reread();
+      if (path === note) onPath?.(renamed);
+      return true;
+    } catch (e) {
+      setRenameError(String(e));
+      return false;
+    }
+  };
+
+  // Desktop: the right-click menu of the sidebar's section headings: the project as a whole.
+  const projectMenu: (MenuItem | false)[] =
+    location?.kind === "local"
+      ? [
+          { label: "New note…", icon: <NoteIcon size={14} />, run: () => setNewNote(true) },
+          Boolean(onAddArtifact) && { label: "Add artifact…", icon: <PlusIcon size={14} />, run: () => onAddArtifact!() },
+          "separator",
+          { label: `Reveal project in ${FILE_MANAGER}`, icon: <FileDirectoryIcon size={14} />, run: () => revealFolder(location.path) },
+          { label: "Copy project path", icon: <CopyIcon size={14} />, run: () => copyText(location.path) },
+        ]
+      : [];
+
+  // Desktop: the right-click menu of an artifact, a version of one, or a note.
+  const entryMenu = (rel: string, dir: boolean): (MenuItem | false)[] => {
+    if (location?.kind !== "local") return [];
+    const abs = `${location.path}/${rel}`;
+    const place = artifactAt(content?.artifacts ?? [], rel);
+    const isNote = !place && /\.(diffmd|md|markdown)$/i.test(rel);
+    const isArtifact = place && !place.version && (rel === `artifacts/${place.artifact}` || content?.artifacts.some((a) => a.kind === "git" && a.repo === rel));
+    return [
+      { label: dir ? "Show folder" : "Show", icon: <EyeIcon size={14} />, run: () => onPath?.(rel) },
+      !dir && canOpenFile(rel) && { label: "Open in your editor", icon: <PencilIcon size={14} />, run: () => openFile(abs) },
+      isNote && { label: "Rename…", icon: <TypographyIcon size={14} />, run: () => setRenaming(rel) },
+      Boolean(place && onAnalyzeAt) && { label: `Analyze ${place!.version ?? place!.artifact}…`, icon: <GitCompareIcon size={14} />, run: () => onAnalyzeAt!(place!) },
+      "separator",
+      { label: `Reveal in ${FILE_MANAGER}`, icon: <FileDirectoryIcon size={14} />, run: () => revealFolder(abs) },
+      { label: "Copy path", icon: <CopyIcon size={14} />, run: () => copyText(abs) },
+      { label: "Copy relative path", run: () => copyText(rel) },
+      Boolean(isArtifact && onRemoveArtifact) && "separator",
+      Boolean(isArtifact && onRemoveArtifact) && {
+        label: `Remove ${place!.artifact}…`,
+        confirm: `Remove ${place!.artifact} and delete ${rel}`,
+        danger: true,
+        icon: <TrashIcon size={14} />,
+        run: () => onRemoveArtifact!(place!.artifact),
+      },
+    ];
+  };
   const binary = content?.binary;
   const shownError = reposError ?? error;
   const found = file === null ? -1 : files.findIndex((f) => f.path === file);
@@ -94,6 +173,8 @@ export function Analysis(props: Props) {
         <p>{shownError}</p>
       </BlankSlate>
     );
+  } else if (location?.kind === "github" && path) {
+    main = <PublishedNote repo={location.repo} path={path} />;
   } else if (location?.kind === "local" && path) {
     main = (
       <FileInfo
@@ -104,6 +185,8 @@ export function Analysis(props: Props) {
         onArtifact={(a) => onArtifact?.(a)}
         onNotes={() => onFile(null)}
         onSaved={reread}
+        artifactPlace={artifactAt(content?.artifacts ?? [], path)}
+        onAnalyze={(place) => onAnalyzeAt?.(place)}
       />
     );
   } else if (location ? !content : !repos) {
@@ -169,11 +252,11 @@ export function Analysis(props: Props) {
     );
   } else if (content?.artifacts.length && !files.length && !binary) {
     main = (
-      <BlankSlate icon={<GitCompareIcon size={48} className="big-icon" />} title={content.artifact?.name ?? "Pick two versions"}>
+      <BlankSlate icon={<GitCompareIcon size={48} className="big-icon" />} title={content.artifact?.name ?? "Compare two versions"}>
         <p>
           {content.base && content.base === content.head
-            ? "Base and head are the same version. Add another version, or pick a different base, in the Artifacts menu."
-            : "Choose a base and a head version in the Artifacts menu to see their diff."}
+            ? "There's only one version so far. Add another copy under the same name, then Analyze the two."
+            : "Pick an artifact or a version on the left and press Analyze to compare it with another."}
         </p>
         {notesActions}
       </BlankSlate>
@@ -201,32 +284,21 @@ export function Analysis(props: Props) {
                 <LinkExternalIcon size={12} />
               </a>
             ) : (
-              <>
-                <div className="sidebar-header repo-link tree-root" onClick={() => setTreeOpen((o) => !o)} title="Project files">
-                  {treeOpen ? <ChevronDownIcon size={12} /> : <ChevronRightIcon size={12} />}
-                  <FileDirectoryIcon size={14} />
-                  <span className="grow mono">{location.folder}</span>
-                  <button
-                    type="button"
-                    className="icon-link"
-                    title="Show in file manager"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      revealFolder(location.path);
-                    }}
-                  >
-                    <LinkExternalIcon size={12} />
-                  </button>
-                </div>
-                {treeOpen && (
-                  <div className="sidebar-section tree">
-                    <FileTree key={`${treeVersion}:${catalogVersion}`} path={location.path} selected={path} onSelect={(rel) => onPath?.(rel)} />
-                  </div>
-                )}
-              </>
+              <ArtifactList
+                artifacts={content?.artifacts ?? []}
+                path={path}
+                onPath={(p) => onPath?.(p)}
+                onAdd={onAddArtifact}
+                headMenu={projectMenu}
+                entryMenu={entryMenu}
+              />
             )}
             <div className="sidebar-section">
-              <div className={`list-item file ${file === null && !path ? "selected" : ""}`} onClick={() => onFile(null)}>
+              <div
+                className={`list-item file section-head ${showingNotes && !notesList.includes(content?.notes_path ?? "") ? "selected" : ""}`}
+                onClick={() => onFile(null)}
+                {...contextMenu(projectMenu)}
+              >
                 <BookIcon size={14} />
                 <div className="main">
                   <div className="title">Notes</div>
@@ -245,6 +317,35 @@ export function Analysis(props: Props) {
                   </button>
                 )}
               </div>
+              {notesList.map((note) =>
+                renaming === note ? (
+                  <RenameRow
+                    key={note}
+                    path={note}
+                    error={renameError}
+                    onRename={(name) => rename(note, name)}
+                    onCancel={() => {
+                      setRenaming(null);
+                      setRenameError(null);
+                    }}
+                  />
+                ) : (
+                <div
+                  key={note}
+                  className={`list-item file sub-item ${path === note || (showingNotes && note === content?.notes_path) ? "selected" : ""}`}
+                  onClick={() => onPath?.(note)}
+                  title={note}
+                  {...contextMenu(entryMenu(note, false))}
+                >
+                  <NoteIcon size={14} />
+                  <div className="main">
+                    <div className="title mono">
+                      <bdi>{note}</bdi>
+                    </div>
+                  </div>
+                </div>
+                ),
+              )}
               {binary ? (
                 <>
                   <div className="sidebar-header">
@@ -267,7 +368,7 @@ export function Analysis(props: Props) {
         )}
       </aside>
       <main className="main-panel">
-        <ProjectHeader project={project} action={action} compact={compact} />
+        {!local && <ProjectHeader project={project} action={action} />}
         {main}
       </main>
       {newNote && location?.kind === "local" && (
@@ -276,7 +377,6 @@ export function Analysis(props: Props) {
           onClose={() => setNewNote(false)}
           onCreated={(rel) => {
             setNewNote(false);
-            setTreeVersion((v) => v + 1);
             reread();
             onPath?.(rel);
           }}
@@ -336,4 +436,143 @@ function FunctionDiff({ fn, content, line }: { fn: BinaryFunction; content: Anal
     );
   }
   return <DiffView file={files[0]} line={line} />;
+}
+
+/**
+ * Desktop: the project's artifacts in the sidebar, each opening to its versions (a file artifact's copies; a git
+ * artifact's are its refs, picked in Analyze). Picking one shows it, with Analyze starting from it.
+ */
+function ArtifactList({
+  artifacts,
+  path,
+  onPath,
+  onAdd,
+  headMenu,
+  entryMenu,
+}: {
+  artifacts: Artifact[];
+  path: string | null;
+  onPath: (path: string) => void;
+  onAdd?: () => void;
+  headMenu: (MenuItem | false)[];
+  entryMenu: (rel: string, dir: boolean) => (MenuItem | false)[];
+}) {
+  const [open, setOpen] = useState(true);
+  // Opened by hand, or because what's on screen is inside it.
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const home = (a: Artifact) => (a.kind === "git" ? a.repo : `artifacts/${a.name}`);
+  const isOpen = (a: Artifact) => expanded.has(a.name) || Boolean(path?.startsWith(`${home(a)}/`));
+  const toggle = (name: string) =>
+    setExpanded((s) => {
+      const next = new Set(s);
+      if (!next.delete(name)) next.add(name);
+      return next;
+    });
+
+  return (
+    <div className="sidebar-section artifacts-section">
+      <div className="list-item file section-head" onClick={() => setOpen((o) => !o)} {...contextMenu(headMenu)}>
+        <PackageIcon size={14} />
+        <div className="main">
+          <div className="title">Artifacts</div>
+        </div>
+        {onAdd && (
+          <button
+            type="button"
+            className="icon-link"
+            title="Add artifact"
+            onClick={(e) => {
+              e.stopPropagation();
+              onAdd();
+            }}
+          >
+            <PlusIcon size={14} />
+          </button>
+        )}
+      </div>
+      {open && !artifacts.length && <div className="sidebar-note muted">None yet: + adds a git repository or a file.</div>}
+      {open &&
+        artifacts.map((a) => (
+          <div key={a.name}>
+            <div
+              className={`list-item file sub-item ${path === home(a) ? "selected" : ""}`}
+              onClick={() => onPath(home(a))}
+              title={a.kind === "git" ? `${a.name} (git repository)` : `${a.name} (${a.versions.length} versions)`}
+              {...contextMenu(entryMenu(home(a), true))}
+            >
+              {a.kind === "file" ? (
+                <button
+                  type="button"
+                  className="icon-link chevron"
+                  aria-label={isOpen(a) ? "Hide versions" : "Show versions"}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    toggle(a.name);
+                  }}
+                >
+                  {isOpen(a) ? <ChevronDownIcon size={12} /> : <ChevronRightIcon size={12} />}
+                </button>
+              ) : (
+                <span className="chevron" />
+              )}
+              {a.kind === "git" ? <GitCommitIcon size={14} /> : <FileIcon size={14} />}
+              <div className="main">
+                <div className="title mono">{a.name}</div>
+              </div>
+            </div>
+            {a.kind === "file" &&
+              isOpen(a) &&
+              [...a.versions].reverse().map((v) => (
+                <div
+                  key={v.id}
+                  className={`list-item file version-item ${path === v.path || path?.startsWith(`${v.path}/`) ? "selected" : ""}`}
+                  onClick={() => onPath(v.path)}
+                  title={v.path}
+                  {...contextMenu(entryMenu(v.path, false))}
+                >
+                  <div className="main">
+                    <div className="title mono">{v.id}</div>
+                  </div>
+                </div>
+              ))}
+          </div>
+        ))}
+    </div>
+  );
+}
+
+/** A note's name being edited in place: Enter renames it, Escape (or leaving it unchanged) doesn't. */
+function RenameRow({ path, error, onRename, onCancel }: { path: string; error: string | null; onRename: (name: string) => Promise<boolean>; onCancel: () => void }) {
+  const file = path.split("/").pop() ?? path;
+  const [name, setName] = useState(file);
+  // Enter and then the blur as the field goes away would rename twice: once is enough.
+  const pending = useRef(false);
+  const done = async () => {
+    if (pending.current) return;
+    if (!name.trim() || name.trim() === file) return onCancel();
+    pending.current = true;
+    if (!(await onRename(name.trim()))) pending.current = false;
+  };
+  return (
+    <div className="list-item file sub-item renaming">
+      <NoteIcon size={14} />
+      <div className="main">
+        <input
+          className="input mono rename-input"
+          value={name}
+          autoFocus
+          aria-label="New name"
+          // The name without its extension selected, ready to type over.
+          onFocus={(e) => e.target.setSelectionRange(0, file.lastIndexOf(".") > 0 ? file.lastIndexOf(".") : file.length)}
+          onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") void done();
+            else if (e.key === "Escape") onCancel();
+          }}
+          onBlur={() => void done()}
+        />
+        {error && <div className="sub error-text">{error}</div>}
+      </div>
+    </div>
+  );
 }

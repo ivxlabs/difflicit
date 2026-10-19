@@ -1,6 +1,6 @@
 {
   "name": "difflicit",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Difflicit: an exploit development toolkit for reproducing ndays and finding 0days.",
   "license": "GPL-3.0-only",
   "repository": {

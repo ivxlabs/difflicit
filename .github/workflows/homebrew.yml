@@ -1,0 +1,59 @@
+# SPDX-License-Identifier: GPL-3.0-only
+name: homebrew
+
+# On publishing a release (not on the tag: Homebrew can't download from a draft), render the cask with the
+# release's version and checksum and push it to ivxlabs/homebrew-tap as Casks/difflicit.rb, for
+# `brew install --cask ivxlabs/tap/difflicit`. Run it by hand to push an existing release.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: A published release's tag, e.g. v1.2.0
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  TAG: ${{ inputs.tag || github.event.release.tag_name }}
+
+jobs:
+  tap:
+    # A pre-release counts as published too; it mustn't upgrade every Homebrew user onto it.
+    if: ${{ github.event_name == 'workflow_dispatch' || !github.event.release.prerelease }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch and hash the macOS disk image
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern '*_universal.dmg'
+          echo "VERSION=${TAG#v}" >> "$GITHUB_ENV"
+          echo "SHA=$(sha256sum ./*_universal.dmg | cut -d' ' -f1)" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+        with:
+          repository: ivxlabs/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+      - name: Render and push
+        run: |
+          set -eu
+          mkdir -p tap/Casks
+          sed -e "s/__VERSION__/$VERSION/" -e "s/__SHA256__/$SHA/" packaging/homebrew/difflicit.rb > tap/Casks/difflicit.rb
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Only Difflicit's own file: the tap is shared with every other ivxlabs product.
+          git add Casks/difflicit.rb
+          git diff --cached --quiet && { echo "tap already up to date"; exit 0; }
+          git commit -m "Difflicit $VERSION"
+          for attempt in 1 2 3; do
+            git push && exit 0
+            git pull --rebase origin "$(git rev-parse --abbrev-ref HEAD)"
+          done
+          echo "::error::could not push to the tap"
+          exit 1

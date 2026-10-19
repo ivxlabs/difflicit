@@ -43,7 +43,7 @@ their own catalog, their own naming rules.
 ## 🖥 Desktop app
 
 **Analyses run locally** in the [Tauri](https://tauri.app) app ([Releases](https://github.com/ivxlabs/difflicit/releases)
-— macOS, Windows, Linux): a project folder holds **artifacts** (a git repo, or files you add), each with
+— macOS, Windows, Linux; on macOS also `brew install --cask ivxlabs/tap/difflicit`): a project folder holds **artifacts** (a git repo, or files you add), each with
 versions to diff — `git diff` for refs, radare2's `radiff2` for binaries (function by function, with
 per-function disassembly diffs), `git diff --no-index` for everything else. **Analyze** predicts what a change was
 about from patterns in its diff (no AI) and writes it up as a diffmd note in the project, edited block by block. **Get a copy** on the website hands the repo over via a `difflicit://`

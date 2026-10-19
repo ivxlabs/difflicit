@@ -33,7 +33,7 @@ projects are Apple CVEs. Read the README's *How it works* first.
 | `scripts/release.mjs` | Version bumps and releases. |
 | `difflicit.config.json` | Instance settings: name, icon, API base, and `projects` (label, owner, naming convention). |
 | `analysis.schema.json` | The schema of the project file (`difflicit.json` / `analysis.json`). Notes are diffmd: https://ivx.run/docs/difflicit/diffmd/ |
-| `.github/workflows/` | `pages` (site), `scrape` (data, weekly), `desktop` (release builds on `v*` tags). |
+| `.github/workflows/` | `pages` (site), `scrape` (data, weekly), `desktop` (release builds on `v*` tags), `homebrew` (the cask in ivxlabs/homebrew-tap, from `packaging/homebrew/`, on publishing a release). |
 
 ## Build and check
 
